@@ -25,6 +25,14 @@ INSTALACIÓN:
 2. Instalar dependencias Python:
    pip install -r requirements.txt
 
+ 3. Instalar ADB (Android Debug Bridge):
+
+   Windows:
+   - Descargar Android Platform Tools de:
+     https://developer.android.com/studio/releases/platform-tools
+   - Extraer y agregar al PATH del sistema
+   - Verificar: adb version  
+
 CONFIGURACIÓN DEL DISPOSITIVO:
 -------------------------------
 1. Habilitar Opciones de Desarrollador en Android:
@@ -39,6 +47,7 @@ CONFIGURACIÓN DEL DISPOSITIVO:
    - Conectar cable USB
    - Aceptar autorización de depuración en el dispositivo
    - Verificar: adb devices
+
 
 EJECUTAR PROGRAMA:
 ------------------
