@@ -4,6 +4,8 @@
 # === Generación de Reportes PDF ===
 reportlab>=4.0.0
 Pillow>=10.0.0
+pathlib 
+
 
 # === Herramientas ADB (Android Debug Bridge) ===
 # NOTA: ADB debe estar instalado en el sistema y en el PATH
