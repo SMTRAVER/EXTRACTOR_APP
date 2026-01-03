@@ -1,5 +1,5 @@
-TRAVERSO FORENSICS - ANDROID DATA EXTRACTION TOOL
 
+TRAVERSO FORENSICS - ANDROID DATA EXTRACTION TOOL
 ================================================================================
 
 DESCRIPCIÓN:
@@ -24,28 +24,6 @@ INSTALACIÓN:
 2. Instalar dependencias Python:
    pip install -r requirements.txt
 
-3. Instalar ADB (Android Debug Bridge):
-
-   Windows:
-   - Descargar Android Platform Tools de:
-     https://developer.android.com/studio/releases/platform-tools
-   - Extraer y agregar al PATH del sistema
-   - Verificar: adb version
-
-   Linux (Ubuntu/Debian):
-   - sudo apt update
-   - sudo apt install adb
-   - Verificar: adb version
-
-   macOS:
-   - brew install android-platform-tools
-   - Verificar: adb version
-
-4. Descargar APK de F-Droid:
-   - Visitar: https://f-droid.org/
-   - Descargar F-Droid.apk
-   - Colocar en la misma carpeta que el script
-
 CONFIGURACIÓN DEL DISPOSITIVO:
 -------------------------------
 1. Habilitar Opciones de Desarrollador en Android:
@@ -60,12 +38,6 @@ CONFIGURACIÓN DEL DISPOSITIVO:
    - Conectar cable USB
    - Aceptar autorización de depuración en el dispositivo
    - Verificar: adb devices
-
-VERIFICAR INSTALACIÓN:
-----------------------
-python -c "import tkinter; import reportlab; print('OK')"
-adb version
-adb devices
 
 EJECUTAR PROGRAMA:
 ------------------
@@ -134,10 +106,9 @@ Error: "Failed to create backup"
 
 ARCHIVOS NECESARIOS:
 --------------------
-✓ extractor_app.py         # Script principal
+✓ extractor_app_5.py         # Script principal
 ✓ F-Droid.apk               # APK para el exploit
 ✓ requirements.txt           # Dependencias Python
-
 
 NOTAS LEGALES:
 --------------
