@@ -127,6 +127,6 @@ v1.0 - Versión actual
 - Logging detallado
 - Extracción simplificada (sin descomprimir tar)
 
-================================================================================
-Copyright © 2026 Traverso Forensics. Todos los derechos reservados.
+
+2026 Traverso Forensics. 
 ================================================================================
