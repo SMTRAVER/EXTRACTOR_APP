@@ -23,9 +23,10 @@ INSTALLATION:
    - tkinter (included in most Python installations)
 
 2. Install Python dependencies:
+   
    pip install -r requirements.txt
 
- 3. Instalar ADB (Android Debug Bridge):
+3. Instalar ADB (Android Debug Bridge):
 
    Windows:
    - Download Android Platform Tools from:
