@@ -27,18 +27,18 @@ INSTALLATION:
 
  3. Instalar ADB (Android Debug Bridge):
 
-      Windows:
+   Windows:
    - Download Android Platform Tools from:
      https://developer.android.com/studio/releases/platform-tools
    - Extract and add to the system PATH
    - Check: adb version
 
-      Linux (Ubuntu/Debian):
+   Linux (Ubuntu/Debian):
    - sudo apt update
    - sudo apt install adb
     - Check: adb version
 
-      macOS:
+   macOS:
    - brew install android-platform-tools
     - Check: adb version
 
