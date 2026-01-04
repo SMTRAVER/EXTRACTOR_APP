@@ -135,15 +135,10 @@ Error: "Failed to create backup"
 
 ARCHIVOS NECESARIOS:
 --------------------
-✓ extractor_app_5.py         # Script principal
+✓ extractor_app.py         # Script principal
 ✓ F-Droid.apk               # APK para el exploit
 ✓ requirements.txt           # Dependencias Python
 
-SOPORTE:
---------
-Para soporte técnico o consultas:
-Email: migueltraverso@estudiotraverso.com.ar
-Documentación: Ver este archivo
 
 NOTAS LEGALES:
 --------------
