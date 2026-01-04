@@ -3,138 +3,138 @@
                      ANDROID DATA EXTRACTION
 ================================================================================
 
-DESCRIPCIÓN:
+DESCRIPTION:
 ------------
-Herramienta forense para extracción de datos de aplicaciones Android
-usando CVE-2024-0044 (Android 12/13)
+Forensic tool for data extraction from Android apps
+using CVE-2024-0044 (Android 12/13)
 
-REQUISITOS PREVIOS:
+PREREQUISITES:
 -------------------
-- Python 3.8 o superior
-- Android Debug Bridge (ADB) instalado y en el PATH
-- Dispositivo Android conectado con USB Debugging habilitado
+- Python 3.8 or higher
+- Android Debug Bridge (ADB) installed and on the PATH
+- Connected Android device with USB Debugging enabled
 - APK de F-Droid (o similar) para el exploit
 
-INSTALACIÓN:
+INSTALLATION:
 ------------
 
-1. Instalar Python:
+1. Install Python:
    - Python 3.8+
-   - tkinter (incluido en la mayoría de instalaciones de Python)
+   - tkinter (included in most Python installations)
 
-2. Instalar dependencias Python:
+2. Install Python dependencies:
    pip install -r requirements.txt
 
  3. Instalar ADB (Android Debug Bridge):
 
    Windows:
-   - Descargar Android Platform Tools de:
+   - Download Android Platform Tools from:
      https://developer.android.com/studio/releases/platform-tools
-   - Extraer y agregar al PATH del sistema
-   - Verificar: adb version  
+   - Extract and add to the system PATH
+   - Check: adb version  
 
-CONFIGURACIÓN DEL DISPOSITIVO:
+DEVICE SETTINGS:
 -------------------------------
-1. Habilitar Opciones de Desarrollador en Android:
-   - Ir a Configuración > Acerca del teléfono
-   - Tocar 7 veces en "Número de compilación"
+1. Enable Developer Options on Android:
+   - Go to Settings > About Phone
+   - Tap 7 times on "Build Number"
 
 2. Habilitar USB Debugging:
-   - Ir a Configuración > Opciones de Desarrollador
-   - Activar "Depuración USB"
+   - Go to Settings > Developer Options
+   - Turn on "USB Debugging"
 
-3. Conectar dispositivo por USB:
-   - Conectar cable USB
-   - Aceptar autorización de depuración en el dispositivo
-   - Verificar: adb devices
+3. Connect device via USB:
+   - Connect USB cable
+   - Accept debug authorization on the device
+   - Check: adb devices
 
 
-EJECUTAR PROGRAMA:
+RUN PROGRAM:
 ------------------
 python extractor_app.py
 
-FUNCIONALIDADES:
+FEATURES:
 ----------------
-✓ Detección automática de dispositivos Android
-✓ Listado de aplicaciones instaladas
-✓ Extracción de datos usando CVE-2024-0044
-✓ Generación de hash SHA256 del archivo extraído
-✓ Generación de reporte PDF con información del dispositivo
-✓ Registro detallado (log) de todas las operaciones
-✓ Interfaz gráfica moderna y fácil de usar
+✓ Automatic detection of Android devices
+✓ List of installed apps
+✓ Data extraction using CVE-2024-0044
+✓ SHA256 hash generation of the extracted file
+✓ PDF report generation with device information
+✓ Detailed log of all operations
+✓ Modern, easy-to-use graphical interface
 
-ESTRUCTURA DE SALIDA:
+OUTPUT STRUCTURE:
 ----------------------
 extraction_[package]_[timestamp]/
-├── wa.tar                          # Datos extraídos
+├── wa.tar # Extracted Data
 ├── [package]_[timestamp]_wa_tar_SHA256.txt  # Hash del tar
 ├── extraction_report_[timestamp].pdf        # Reporte en PDF
 ├── extraction_report_[timestamp]_SHA256.txt # Hash del PDF
-└── extraction_log_[timestamp].txt           # Log de operaciones
+└── extraction_log_[timestamp].txt # Operations Log
 
-DISPOSITIVOS COMPATIBLES:
+SUPPORTED DEVICES:
 --------------------------
 - Android 12
 - Android 13
-- Dispositivos con CVE-2024-0044 sin parchear
+- Devices with unpatched CVE-2024-0044
 
-REQUISITOS DE SEGURIDAD:
+SAFETY REQUIREMENTS:
 -------------------------
-⚠️ Esta herramienta debe ser utilizada solo por:
-- Personal autorizado de investigación forense
-- Con orden judicial o autorización legal
-- En dispositivos propios o con consentimiento
+⚠️ This tool should be used only by:
+- Authorized forensic investigation personnel
+- With a court order or legal authorization
+- On your own devices or with consent
 
-❌ NO usar para:
-- Acceso no autorizado a dispositivos
-- Violación de privacidad
-- Actividades ilegales
+❌ NO use for:
+- Unauthorized access to devices
+- Privacy violation
+- Illegal activities
 
-SOLUCIÓN DE PROBLEMAS:
+TROUBLESHOOTING:
 ----------------------
 
 Error: "adb: command not found"
-   → ADB no está instalado o no está en el PATH
-   → Instalar ADB según las instrucciones arriba
+   → ADB is not installed or is not in the PATH
+   → Install ADB as instructed above
 
 Error: "no devices/emulators found"
-   → Dispositivo no conectado o USB debugging deshabilitado
-   → Verificar conexión USB y autorizar en el dispositivo
-   → Ejecutar: adb devices
+   → Device not connected or USB debugging disabled
+   → Verify USB connection and authorize on the device
+   → Execute: adb devices
 
 Error: "APK not found"
-   → F-Droid.apk no está en la carpeta del script
-   → Descargar desde https://f-droid.org/
+   → F-Droid.apk is not in the script folder
+   → Download from https://f-droid.org/
 
 Error: "ImportError: No module named 'reportlab'"
    → pip install reportlab
 
 Error: "Failed to create backup"
-   → El exploit puede no funcionar en este dispositivo
-   → Verificar versión de Android (12 o 13)
-   → Verificar que el dispositivo no tenga parches de seguridad recientes
+   → The exploit may not work on this device
+   → Check Android version (12 or 13)
+   → Verify that the device does not have recent security patches
 
-ARCHIVOS NECESARIOS:
+REQUIRED FILES:
 --------------------
 ✓ extractor_app_5.py         # Script principal
 ✓ F-Droid.apk               # APK para el exploit
 ✓ requirements.txt           # Dependencias Python
 
-NOTAS LEGALES:
+LEGAL NOTES:
 --------------
-- Uso exclusivo para análisis forense legal
-- Requiere autorización legal para su uso
-- El usuario es responsable del cumplimiento de leyes aplicables
-- CVE-2024-0044 es una vulnerabilidad conocida y documentada
+- Use for legal forensics only
+- Requires legal authorization for use
+- The user is responsible for compliance with applicable laws
+- CVE-2024-0044 is a known and documented vulnerability
 
 CHANGELOG:
 ----------
-v1.0 - Versión actual
-- Generación de reportes PDF
-- Cálculo de hash SHA256
-- Interfaz mejorada
-- Logging detallado
-- Extracción simplificada (sin descomprimir tar)
+v1.0 - Current Version
+- PDF report generation
+- SHA256 hash calculation
+- Improved interface
+- Detailed logging
+- Simplified extraction (no decompressing tar)
 
 
 2026 Traverso Forensics. 
