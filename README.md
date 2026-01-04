@@ -126,7 +126,7 @@ Error: "Failed to create backup"
 
 REQUIRED FILES:
 --------------------
-✓ extractor_app_5.py         # Script principal
+✓ extractor_app.py          # Script principal
 ✓ F-Droid.apk               # APK para el exploit
 ✓ requirements.txt           # Dependencias Python
 
