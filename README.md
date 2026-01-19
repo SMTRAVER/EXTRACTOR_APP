@@ -1,7 +1,7 @@
 
 **TRAVERSO FORENSICS**
 <div align="center">
-<img src="./assets/traverso_logo.png" alt="TRAVERSO FORENSIC Logo" width="200"/>
+<img src="./traverso_logo.png" alt="TRAVERSO FORENSIC" width="200"/>
 </div>
 <br>
 **ANDROID DATA EXTRACTION**
