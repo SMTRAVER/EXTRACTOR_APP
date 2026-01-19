@@ -125,7 +125,7 @@ Error: "ImportError: No module named 'reportlab'" → pip install reportlab
 Error: "Failed to create backup" → The exploit may not work on this device → Check Android version (12 or 13) → Verify that the device does not have recent security patches
 
 **REQUIRED FILES:**
-✓ extractor_app.py # Script principal ✓ traverso.apk # APK para el exploit ✓ requirements.txt # Dependencias Python #forensics_report.py
+✓ extractor_app.py # Script principal ✓ traverso.apk # APK para el exploit ✓ requirements.txt # Dependencias Python #forensic_report.py
 
 **LEGAL NOTES:**
 
