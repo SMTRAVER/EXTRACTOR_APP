@@ -81,7 +81,13 @@ python extractor_app.py
 ```
 **FEATURES:**
 
-✓ Automatic detection of Android devices ✓ List of installed apps ✓ Data extraction using CVE-2024-0044 ✓ SHA256 hash generation of the extracted file ✓ PDF report generation with device information ✓ Detailed log of all operations ✓ Modern, easy-to-use graphical interface
+✓ Automatic detection of Android devices
+✓ List of installed apps 
+✓ Data extraction using CVE-2024-0044 
+✓ SHA256 hash generation of the extracted file 
+✓ PDF report generation with device information 
+✓ Detailed log of all operations 
+✓ Modern, easy-to-use graphical interface
 
 **OUTPUT STRUCTURE:**
 
