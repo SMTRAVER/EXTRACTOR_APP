@@ -1,9 +1,11 @@
 
 **TRAVERSO FORENSICS**
+
 <div align="center">
 <img src="./traverso_logo.png" alt="TRAVERSO FORENSIC" width="200"/>
 </div>
 <br>
+
 **ANDROID DATA EXTRACTION**
 DESCRIPTION:
 Forensic tool for data extraction from Android apps using CVE-2024-0044 (Android 12/13)
