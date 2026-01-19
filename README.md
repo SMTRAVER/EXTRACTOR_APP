@@ -118,14 +118,14 @@ Error: "adb: command not found" → ADB is not installed or is not in the PATH �
 
 Error: "no devices/emulators found" → Device not connected or USB debugging disabled → Verify USB connection and authorize on the device → Execute: adb devices
 
-Error: "APK not found" → F-Droid.apk is not in the script folder → Download from https://f-droid.org/
+Error: "APK not found" → Traverso.apk is not in the script folder
 
 Error: "ImportError: No module named 'reportlab'" → pip install reportlab
 
 Error: "Failed to create backup" → The exploit may not work on this device → Check Android version (12 or 13) → Verify that the device does not have recent security patches
 
 **REQUIRED FILES:**
-✓ extractor_app.py # Script principal ✓ F-Droid.apk # APK para el exploit ✓ requirements.txt # Dependencias Python
+✓ extractor_app.py # Script principal ✓ traverso.apk # APK para el exploit ✓ requirements.txt # Dependencias Python #forensics_report.py
 
 **LEGAL NOTES:**
 
