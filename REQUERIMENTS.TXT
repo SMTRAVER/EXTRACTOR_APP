@@ -1,0 +1,10 @@
+# Dependencias para Traverso Forensics Suite
+
+# Necesario para el procesamiento de imágenes en los reportes (forensic_report.py)
+Pillow>=9.0.0
+
+# Necesario para la generación de PDFs profesionales (forensic_report.py)
+reportlab>=4.0.0
+
+# Nota: El módulo 'tkinter' generalmente viene preinstalado con Python.
+# Si estás en Linux (Ubuntu/Debian) y falla, instala: sudo apt-get install python3-tk
