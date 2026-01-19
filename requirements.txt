@@ -1,26 +1,10 @@
-# Traverso Forensics - Android Data Extraction Tool
-# Dependencias del proyecto
+# Dependencias para Traverso Forensics Suite
 
-# === Generación de Reportes PDF ===
+# Necesario para el procesamiento de imágenes en los reportes (forensic_report.py)
+Pillow>=9.0.0
+
+# Necesario para la generación de PDFs profesionales (forensic_report.py)
 reportlab>=4.0.0
-Pillow>=10.0.0
-pathlib 
 
-
-# === Herramientas ADB (Android Debug Bridge) ===
-# NOTA: ADB debe estar instalado en el sistema y en el PATH
-# Windows: Descargar Android Platform Tools
-# Linux: sudo apt install adb
-# macOS: brew install android-platform-tools
-
-# === Dependencias de Python (incluidas en stdlib) ===
-# tkinter - Interfaz gráfica (incluido en Python)
-# subprocess - Ejecución de comandos (incluido en Python)
-# threading - Multithreading (incluido en Python)
-# hashlib - Cálculo de hashes (incluido en Python)
-# pathlib - Manejo de rutas (incluido en Python)
-# datetime - Fecha y hora (incluido en Python)
-# re - Expresiones regulares (incluido en Python)
-# os - Sistema operativo (incluido en Python)
-# shutil - Operaciones de archivos (incluido en Python)
-# time - Tiempo (incluido en Python)
+# Nota: El módulo 'tkinter' generalmente viene preinstalado con Python.
+# Si estás en Linux (Ubuntu/Debian) y falla, instala: sudo apt-get install python3-tk
