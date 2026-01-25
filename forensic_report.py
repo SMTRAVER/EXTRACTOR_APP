@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Traverso Forensics - Professional Report Generator v1.0
@@ -6,6 +5,7 @@ FIXES & UPDATES:
 - v1.0: Text Wrapping y Auto-Layout corregidos.
 - v1.1: Detección automática de herramienta y firma del perito.
 - v1.0: Verificación y cálculo automático de HASH SHA-256 para imágenes en el reporte.
+- v1.2: HOTFIX - Cadena de Custodia convertida a Texto Plano para evitar LayoutError en PDFs.
 
 Developer: Miguel Ángel Alfredo TRAVERSO - 2026
 """
@@ -518,28 +518,28 @@ METRICS:
                 story.append(Paragraph(scope_content, styles['Normal']))
             story.append(Spacer(1, 0.5*cm))
 
-            # 4. CHAIN OF CUSTODY
+            # 4. CHAIN OF CUSTODY (TEXT MODE - FIX FOR LAYOUT ERROR)
             story.append(Paragraph("2. CHAIN OF CUSTODY", style_h2))
+            
             if self.chain_of_custody:
-                cc_data = [["Timestamp", "Custodian", "Action / Purpose"]]
-                
-                for c in self.chain_of_custody:
-                    p_ts = Paragraph(c['ts'], style_cell)
-                    p_person = Paragraph(c['person'], style_cell)
-                    p_action = Paragraph(c['action'], style_cell)
-                    cc_data.append([p_ts, p_person, p_action])
-                
-                t_cc = Table(cc_data, colWidths=[4.5*cm, 4.5*cm, 7*cm])
-                t_cc.setStyle(TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#95a5a6")),
-                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                    ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                    ('VALIGN', (0,0), (-1,-1), 'TOP'), 
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-                ]))
-                story.append(t_cc)
+                # Modificación: Usamos loops y párrafos en lugar de Table para permitir
+                # que los textos largos (logs) se dividan correctamente entre páginas.
+                for idx, c in enumerate(self.chain_of_custody, 1):
+                    # Encabezado con datos clave
+                    header_text = f"<b>[Entry #{idx}]</b> {c['ts']} | Custodian: <b>{c['person']}</b>"
+                    story.append(Paragraph(header_text, styles['Normal']))
+                    
+                    # Cuerpo de la acción (con estilo de código para logs)
+                    # Reemplazamos saltos de línea por <br/>
+                    action_content = c['action'].replace('\n', '<br/>')
+                    story.append(Paragraph(f"<i>Action/Purpose:</i><br/>{action_content}", style_code))
+                    
+                    # Separador
+                    story.append(Paragraph("_"*80, styles['Normal']))
+                    story.append(Spacer(1, 0.2*cm))
             else:
                 story.append(Paragraph("<i>No entries recorded.</i>", styles['Normal']))
+            
             story.append(PageBreak())
 
             # 5. LOG
@@ -649,4 +649,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = ISOForensicReportGUI(root)
     root.mainloop()
-
