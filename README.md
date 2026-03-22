@@ -1,166 +1,125 @@
+TRAVERSO FORENSICS SUITE
+   PROFESSIONAL ANDROID EXTRACTION & REPORTING
+================================================================================
 
-**TRAVERSO FORENSICS**
-
-<div align="center">
-<img src="traverso_logo.png" alt="TRAVERSO FORENSIC" width="200"/>
-</div>
-<br>
-
-**ANDROID DATA EXTRACTION**
 DESCRIPTION:
-Forensic tool for data extraction from Android apps using CVE-2024-0044 (Android 12/13)
-
-**PREREQUISITES:**
-Python 3.8 or higher
-Android Debug Bridge (ADB) installed and on the PATH
-Connected Android device with USB Debugging enabled
-APK de F-Droid (o similar) para el exploit
-
-**INSTALLATION:**
-
-**Install Python:**
-
-Python 3.8+
-tkinter (included in most Python installations)
-
-**Install Python dependencies:**
-```
-pip install -r requirements.txt
-```
-
-**Instalar ADB (Android Debug Bridge):**
-
-**Windows:**
-```
-Download Android Platform Tools from: https://developer.android.com/studio/releases/platform-tools
-```
-Extract and add to the system PATH
-
-Check: adb version
-
-**Linux (Ubuntu/Debian):**
-```
-sudo apt update
-
-sudo apt install adb
-```
-
-**Check: adb version**
-
-macOS:
-```
-brew install android-platform-tools
-```
-Check: adb version
-
-**DEVICE SETTINGS:**
-
-Enable Developer Options on Android:
-
-Go to Settings > About Phone
-
-Tap 7 times on "Build Number"
-
-**Habilitar USB Debugging:**
-
-Go to Settings > Developer Options
-
-Turn on "USB Debugging"
-
-**Connect device via USB:**
-
-Connect USB cable
-
-Accept debug authorization on the device
-
-Check: adb devices
-
-**RUN PROGRAM:**
-```
-python extractor_app.py
-```
-**FEATURES:**
-
-✓ Automatic detection of Android devices
-
-✓ List of installed apps 
-
-✓ Data extraction using CVE-2024-0044 
-
-✓ SHA256 hash generation of the extracted file 
-
-✓ PDF report generation with device information 
-
-✓ Detailed log of all operations 
-
-✓ Modern, easy-to-use graphical interface
-
-**OUTPUT STRUCTURE:**
-
-extraction_[package][timestamp]/ ├── wa.tar # Extracted Data ├── [package][timestamp]wa_tar_SHA256.txt # Hash del tar ├── extraction_report[timestamp].pdf # Reporte en PDF ├── extraction_report_[timestamp]SHA256.txt # Hash del PDF └── extraction_log[timestamp].txt # Operations Log
-
-**SUPPORTED DEVICES:**
-
-Android 12
-
-Android 13
-
-Devices with unpatched CVE-2024-0044
-
-**SAFETY REQUIREMENTS:**
-
-⚠️ This tool should be used only by:
-
-Authorized forensic investigation personnel
-
-With a court order or legal authorization
-
-On your own devices or with consent
-
-❌ NO use for:
-
-Unauthorized access to devices
-
-Privacy violation
-
-Illegal activities
-
-**TROUBLESHOOTING:**
-Error: "adb: command not found" → ADB is not installed or is not in the PATH → Install ADB as instructed above
-
-Error: "no devices/emulators found" → Device not connected or USB debugging disabled → Verify USB connection and authorize on the device → Execute: adb devices
-
-Error: "APK not found" → Traverso.apk is not in the script folder
-
-Error: "ImportError: No module named 'reportlab'" → pip install reportlab
-
-Error: "Failed to create backup" → The exploit may not work on this device → Check Android version (12 or 13) → Verify that the device does not have recent security patches
-
-**REQUIRED FILES:**
-✓ extractor_app.py # Script principal ✓ traverso.apk # APK para el exploit ✓ requirements.txt # Dependencias Python #forensic_report.py
-
-**LEGAL NOTES:**
-
-Use for legal forensics only
-
-Requires legal authorization for use
-
-The user is responsible for compliance with applicable laws
-
-CVE-2024-0044 is a known and documented vulnerability
-
-**CHANGELOG:**
-
-v1.0 - Current Version
-
-PDF report generation
-
-SHA256 hash calculation
-
-Improved interface
-
-Detailed logging
-
-Simplified extraction (no decompressing tar)
-
-**2026 Traverso Forensics.**
+------------
+Complete forensic suite compliant with ISO/IEC 27037:2012.
+It consists of two main modules:
+1. Extraction Tool: Exploits CVE-2024-0044 to extract app data from Android 12/13.
+2. Reporting System: Generates signed PDF reports with hash verification and chain of custody.
+
+PREREQUISITES:
+-------------------
+- Python 3.8 or higher
+- Android Debug Bridge (ADB) installed and on the system PATH
+- Connected Android device with "USB Debugging" enabled
+- "traverso.apk" (Exploit payload) in the same folder
+- Target device must be Android 12 or 13 (Security Patch < March 2024 recommended)
+
+INSTALLATION:
+------------
+
+1. Install Python 3.8+:
+   Ensure "Add Python to PATH" is checked during installation.
+
+2. Install Python dependencies:
+   Open a terminal/command prompt in the folder and run:
+   
+   pip install -r requirements.txt
+
+3. Install ADB (Android Debug Bridge):
+   
+   [Windows]
+   - Download Platform Tools: https://developer.android.com/studio/releases/platform-tools
+   - Extract and add the folder to your System Environment PATH.
+   - Verify with: adb version
+
+   [Linux/Mac]
+   - Linux: sudo apt install adb
+   - Mac: brew install android-platform-tools
+
+USAGE GUIDE:
+------------------
+
+STEP 1: DATA EXTRACTION
+Run the extractor to obtain data from the device.
+
+   python extractor_app.py
+
+   1. Connect device via USB.
+   2. Click "Detect Device" -> "List All Apps".
+   3. Select target application.
+   4. Click "Start Forensic Extraction".
+   5. Wait for the "SUCCESS" message.
+
+STEP 2: REPORT GENERATION
+Run the reporting tool to document the evidence.
+
+   python forensic_report.py
+
+   1. Go to "Case Data" tab -> Click "Select Extraction Directory".
+   2. Choose the folder created in Step 1 (e.g., extraction_com_whatsapp_...).
+   3. The tool will auto-load logs, hashes, and metadata.
+   4. Go to "Evidence Photos" to add pictures of the device (Hashes are auto-calculated).
+   5. Go to "Chain of Custody" to add custodians.
+   6. Go to "Finalize" -> "GENERATE ISO 27037 PDF REPORT".
+
+FEATURES:
+----------------
+[Extractor v1.0]
+✓ CVE-2024-0044 Payload Injection (Bypasses "run-as" restrictions)
+✓ Standard ISO/IEC 27037:2012 Compliance checks
+✓ Pre/Post-extraction verification logs
+✓ Automatic SHA256 calculation of extracted TAR
+✓ Chain of Custody cleanup (removes artifacts)
+
+[Report Generator v1.2]
+✓ Professional PDF generation
+✓ Automatic ingestion of extraction logs
+✓ Photographic evidence handling with auto-SHA256 calculation
+✓ Sidecar Hash verification (checks for .sha256 files)
+✓ Forensic Analyst signature block
+✓ Dynamic Chain of Custody table
+
+OUTPUT STRUCTURE:
+----------------------
+extraction_[package]_[timestamp]/
+├── [package]_backup.tar                 # Raw Extracted Data
+├── [package]_backup_SHA256.txt          # Integrity Hash
+├── extraction_log.txt                   # Forensic Process Log
+├── detalles_extraccion.txt              # Metadata (Timezone, Version, etc.)
+└── FORENSIC_REP_[CaseID].pdf            # Final Report (Generated by Step 2)
+
+TROUBLESHOOTING:
+----------------------
+
+Error: "ModuleNotFoundError: No module named 'PIL'" or 'reportlab'
+   → Run: pip install -r requirements.txt
+
+Error: "ADB not found"
+   → ADB is missing from your system PATH. Reinstall Platform Tools.
+
+Error: "Tar is EMPTY" (Extractor)
+   → The device might be patched (Security patch >= March 2024).
+   → SELinux is enforcing strict policies preventing the exploit.
+
+Error: "ReportLab library is missing" (Reporter)
+   → The dependency failed to install. Try: pip install reportlab
+
+REQUIRED FILES:
+--------------------
+1. extractor_app.py       # Extraction Module
+2. forensic_report.py     # Reporting Module
+3. requirements.txt       # Dependencies list
+4. traverso.apk           # Helper APK for the exploit (Must be present)
+
+LEGAL DISCLAIMER:
+-----------------
+This software is intended for authorized forensic investigations only.
+- Use only on devices you own or have legal authorization to access.
+- Misuse of this tool violates privacy laws.
+- The developers assume no liability for unauthorized use.
+
+© 2026 Traverso Forensics.
+================================================================================
